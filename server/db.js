@@ -4,6 +4,26 @@ const { Pool } = pg
 
 let pool = null
 
+function buildPoolConfig(connectionString) {
+  const parsedUrl = new URL(connectionString)
+  const isLocalhost = /^(localhost|127\.0\.0\.1)$/i.test(parsedUrl.hostname)
+
+  parsedUrl.searchParams.delete('ssl')
+  parsedUrl.searchParams.delete('sslmode')
+  parsedUrl.searchParams.delete('sslcert')
+  parsedUrl.searchParams.delete('sslkey')
+  parsedUrl.searchParams.delete('sslrootcert')
+
+  return {
+    connectionString: parsedUrl.toString(),
+    ssl: isLocalhost
+      ? false
+      : {
+          rejectUnauthorized: false,
+        },
+  }
+}
+
 function getPool() {
   if (pool) {
     return pool
@@ -15,16 +35,7 @@ function getPool() {
     throw new Error('DATABASE_URL no esta definido. Configura la base de datos antes de iniciar la API.')
   }
 
-  const needsSsl = !/localhost|127\.0\.0\.1/i.test(connectionString)
-
-  pool = new Pool({
-    connectionString,
-    ssl: needsSsl
-      ? {
-          rejectUnauthorized: false,
-        }
-      : false,
-  })
+  pool = new Pool(buildPoolConfig(connectionString))
 
   return pool
 }
