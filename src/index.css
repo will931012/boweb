@@ -370,6 +370,16 @@ img {
   white-space: nowrap;
 }
 
+.admin-approval-row {
+  grid-template-columns: minmax(0, 1.2fr) minmax(100px, 0.8fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr) minmax(180px, 1fr);
+}
+
+.admin-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .contribution-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -492,5 +502,10 @@ img {
 
   .admin-table-row {
     grid-template-columns: 1fr;
+  }
+
+  .admin-actions {
+    justify-content: stretch;
+    flex-direction: column;
   }
 }

@@ -329,8 +329,12 @@ function App() {
       return 'Aporte semanal'
     }
 
-    if (account.currentWeekPaid) {
+    if (account.currentWeekStatus === 'approved') {
       return `La semana ${account.currentWeekKey} ya fue cubierta`
+    }
+
+    if (account.currentWeekStatus === 'pending') {
+      return `La semana ${account.currentWeekKey} esta pendiente de aprobacion`
     }
 
     return `Aporte semanal ${currencyFormatter.format(account.weeklyContributionAmount)}`
@@ -456,6 +460,48 @@ function App() {
     }
   }
 
+  const handleReviewWeeklyContribution = async (
+    contributionId: number,
+    action: 'approve' | 'deny',
+  ) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      return
+    }
+
+    setReviewingContributionId(contributionId)
+    setAccountError('')
+
+    try {
+      const response = await fetch(`/api/admin/weekly-approvals/${contributionId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          adminUserId: currentUser.id,
+          action,
+        }),
+      })
+
+      const data = (await response.json()) as AdminApprovalsResponse
+
+      if (!response.ok || !data.ok || !data.contributions) {
+        throw new Error(data.message ?? 'No se pudo revisar la cuota semanal.')
+      }
+
+      setPendingWeeklyApprovals(data.contributions)
+      setAccountMessage(data.message)
+      await loadAdminMembers(currentUser.id)
+      await loadAccount(currentUser.id)
+    } catch (error) {
+      setAccountError(
+        error instanceof Error ? error.message : 'No se pudo revisar la cuota semanal.',
+      )
+    } finally {
+      setReviewingContributionId(null)
+    }
+  }
+
   const handleLogout = () => {
     storeUserSession(null)
     setCurrentUser(null)
@@ -472,7 +518,9 @@ function App() {
   }
 
   const openContributionModal = () => {
-    setIncludeWeeklyContribution(account ? !account.currentWeekPaid : true)
+    setIncludeWeeklyContribution(
+      account ? account.currentWeekStatus === 'none' || account.currentWeekStatus === 'denied' : true,
+    )
     setIncludeExtraContribution(false)
     setExtraContributionAmount('')
     setAccountError('')
@@ -564,9 +612,11 @@ function App() {
                     </span>
                     <strong>{account?.currentWeekKey ?? 'Sin semana'}</strong>
                     <p>
-                      {account?.currentWeekPaid
-                        ? 'la semana actual ya tiene aporte semanal.'
-                        : 'la semana actual todavia no tiene aporte semanal.'}
+                      {account?.currentWeekStatus === 'approved'
+                        ? 'la semana actual ya tiene aporte semanal aprobado.'
+                        : account?.currentWeekStatus === 'pending'
+                          ? 'la semana actual tiene una cuota pendiente de aprobacion.'
+                          : 'la semana actual todavia no tiene aporte semanal.'}
                     </p>
                   </Card>
                 </Grid>
@@ -642,6 +692,60 @@ function App() {
                   <>
                     <Separator size="4" />
                     <Card className="mini-info-card recent-payments-card">
+                      <strong>Cuotas semanales pendientes</strong>
+                      <div className="admin-table">
+                        <div className="admin-table-row admin-table-head admin-approval-row">
+                          <span>User name</span>
+                          <span>State ID</span>
+                          <span>Semana</span>
+                          <span>Monto</span>
+                          <span>Acciones</span>
+                        </div>
+
+                        {isLoadingAdminApprovals ? (
+                          <p>Cargando cuotas pendientes...</p>
+                        ) : pendingWeeklyApprovals.length ? (
+                          pendingWeeklyApprovals.map((contribution) => (
+                            <div
+                              key={contribution.id}
+                              className="admin-table-row admin-approval-row"
+                            >
+                              <span>{contribution.userName}</span>
+                              <span>{contribution.stateId}</span>
+                              <span>{contribution.weekKey}</span>
+                              <strong>{currencyFormatter.format(contribution.amount)}</strong>
+                              <div className="admin-actions">
+                                <Button
+                                  size="2"
+                                  color="green"
+                                  disabled={reviewingContributionId === contribution.id}
+                                  onClick={() =>
+                                    handleReviewWeeklyContribution(contribution.id, 'approve')
+                                  }
+                                >
+                                  Aceptar
+                                </Button>
+                                <Button
+                                  size="2"
+                                  color="red"
+                                  variant="soft"
+                                  disabled={reviewingContributionId === contribution.id}
+                                  onClick={() =>
+                                    handleReviewWeeklyContribution(contribution.id, 'deny')
+                                  }
+                                >
+                                  Denegar
+                                </Button>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <p>No hay cuotas semanales pendientes.</p>
+                        )}
+                      </div>
+                    </Card>
+
+                    <Card className="mini-info-card recent-payments-card">
                       <strong>Tabla administrativa</strong>
                       <div className="admin-table">
                         <div className="admin-table-row admin-table-head">
@@ -708,14 +812,19 @@ function App() {
                 <input
                   type="checkbox"
                   checked={includeWeeklyContribution}
-                  disabled={account?.currentWeekPaid}
+                  disabled={
+                    account?.currentWeekStatus === 'approved' ||
+                    account?.currentWeekStatus === 'pending'
+                  }
                   onChange={(event) => setIncludeWeeklyContribution(event.target.checked)}
                 />
                 <span>
                   Aporte semanal entregado
                   <small>
-                    {account?.currentWeekPaid
-                      ? `La semana ${account.currentWeekKey} ya fue registrada.`
+                    {account?.currentWeekStatus === 'approved'
+                      ? `La semana ${account.currentWeekKey} ya fue aprobada.`
+                      : account?.currentWeekStatus === 'pending'
+                        ? `La semana ${account.currentWeekKey} esta esperando revision del admin.`
                       : weeklyButtonLabel}
                   </small>
                 </span>
