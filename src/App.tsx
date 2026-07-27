@@ -23,7 +23,7 @@ import {
   UserRoundPlus,
   Wallet,
 } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import heroArt from '../3356B985-EEDA-4D78-BE8D-1DD8A9293B2A.png'
 
 type AccessMode = 'login' | 'register'
@@ -126,6 +126,13 @@ const panelMotion = {
   initial: { opacity: 0, y: 24 },
   animate: { opacity: 1, y: 0 },
   transition: { duration: 0.55, ease: [0.16, 1, 0.3, 1] as const },
+}
+
+const pageMotion = {
+  initial: { opacity: 0, y: 18 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -18 },
+  transition: { duration: 0.28, ease: [0.22, 1, 0.36, 1] as const },
 }
 
 const initialStats: AccessStats = {
@@ -263,6 +270,10 @@ function App() {
 
   const navigateTo = (nextRoute: AppRoute) => {
     if (typeof window === 'undefined') {
+      return
+    }
+
+    if (route === nextRoute) {
       return
     }
 
@@ -569,11 +580,14 @@ function App() {
       return null
     }
 
+    const isRouteSwitching = isLoadingAccount || isLoadingAdminTable || isLoadingAdminApprovals
+
     return (
       <div className="dashboard-nav">
         <Button
           variant={route === '/' ? 'solid' : 'soft'}
           size="2"
+          disabled={route === '/' || isRouteSwitching}
           onClick={() => navigateTo('/')}
         >
           Mi cuenta
@@ -582,6 +596,7 @@ function App() {
           <Button
             variant={route === '/admin' ? 'solid' : 'soft'}
             size="2"
+            disabled={route === '/admin' || isRouteSwitching}
             onClick={() => navigateTo('/admin')}
           >
             Admin
@@ -677,8 +692,17 @@ function App() {
           <Grid columns={{ initial: '1', md: '2' }} gap="4">
             <Card className="mini-info-card recent-payments-card">
               <strong>Movimientos recientes</strong>
-              <div className="payment-list">
-                {recentPayments.length ? (
+              <div
+                className={`payment-list ${isLoadingAccount ? 'is-loading' : ''}`}
+                aria-busy={isLoadingAccount}
+              >
+                {isLoadingAccount ? (
+                  <>
+                    <div className="payment-row skeleton-row" />
+                    <div className="payment-row skeleton-row" />
+                    <div className="payment-row skeleton-row" />
+                  </>
+                ) : recentPayments.length ? (
                   recentPayments.map((payment) => (
                     <div key={`${payment.kind}-${payment.id}`} className="payment-row">
                       <div>
@@ -698,7 +722,10 @@ function App() {
 
             <Card className="mini-info-card recent-payments-card">
               <strong>Estado del miembro</strong>
-              <div className="member-summary">
+              <div
+                className={`member-summary ${isLoadingAccount ? 'is-loading' : ''}`}
+                aria-busy={isLoadingAccount}
+              >
                 <div>
                   <span>Ultimo pago aprobado</span>
                   <p>
@@ -775,7 +802,10 @@ function App() {
 
             <Card className="mini-info-card recent-payments-card">
               <strong>Aportes pendientes</strong>
-              <div className="admin-table">
+              <div
+                className={`admin-table ${isLoadingAdminApprovals ? 'is-loading' : ''}`}
+                aria-busy={isLoadingAdminApprovals}
+              >
                 <div className="admin-table-row admin-table-head admin-approval-row">
                   <span>User name</span>
                   <span>State ID</span>
@@ -786,7 +816,10 @@ function App() {
                 </div>
 
                 {isLoadingAdminApprovals ? (
-                  <p>Cargando aportes pendientes...</p>
+                  <>
+                    <div className="admin-table-row admin-approval-row admin-approval-row-wide skeleton-row" />
+                    <div className="admin-table-row admin-approval-row admin-approval-row-wide skeleton-row" />
+                  </>
                 ) : pendingApprovals.length ? (
                   pendingApprovals.map((contribution) => {
                     const contributionKey = `${contribution.kind}-${contribution.id}`
@@ -830,7 +863,10 @@ function App() {
 
             <Card className="mini-info-card recent-payments-card">
               <strong>Tabla administrativa</strong>
-              <div className="admin-table">
+              <div
+                className={`admin-table ${isLoadingAdminTable ? 'is-loading' : ''}`}
+                aria-busy={isLoadingAdminTable}
+              >
                 <div className="admin-table-row admin-table-head">
                   <span>User name</span>
                   <span>State ID</span>
@@ -838,7 +874,11 @@ function App() {
                 </div>
 
                 {isLoadingAdminTable ? (
-                  <p>Cargando tabla administrativa...</p>
+                  <>
+                    <div className="admin-table-row skeleton-row" />
+                    <div className="admin-table-row skeleton-row" />
+                    <div className="admin-table-row skeleton-row" />
+                  </>
                 ) : adminMembers.length ? (
                   adminMembers.map((member) => (
                     <div key={member.id} className="admin-table-row">
@@ -892,7 +932,11 @@ function App() {
             </Card>
           </motion.section>
 
-          {route === '/admin' ? renderAdminPage() : renderMemberPage()}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={route} {...pageMotion}>
+              {route === '/admin' ? renderAdminPage() : renderMemberPage()}
+            </motion.div>
+          </AnimatePresence>
         </Section>
 
         {route === '/' && isContributionModalOpen ? (
@@ -1047,9 +1091,11 @@ function App() {
                   <span>State ID</span>
                   <TextField.Root
                     size="3"
+                    type={mode === 'login' ? 'password' : 'text'}
                     value={stateId}
                     onChange={(event) => setStateId(event.target.value)}
-                    placeholder="BO-2047"
+                    placeholder={mode === 'login' ? '****' : 'BO-2047'}
+                    autoComplete={mode === 'login' ? 'current-password' : 'off'}
                   />
                 </label>
 

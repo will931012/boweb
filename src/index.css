@@ -88,6 +88,7 @@ img {
 
 .admin-layout {
   display: grid;
+  min-height: 720px;
 }
 
 .access-layout {
@@ -156,6 +157,10 @@ img {
   display: inline-flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.dashboard-nav button[disabled] {
+  opacity: 0.72;
 }
 
 .dashboard-title {
@@ -312,6 +317,7 @@ img {
   display: grid;
   gap: 10px;
   margin-top: 14px;
+  min-height: 222px;
 }
 
 .payment-row {
@@ -344,6 +350,7 @@ img {
   display: grid;
   gap: 14px;
   margin-top: 14px;
+  min-height: 222px;
 }
 
 .member-summary div {
@@ -362,6 +369,7 @@ img {
   display: grid;
   gap: 10px;
   margin-top: 14px;
+  min-height: 232px;
 }
 
 .admin-table-row {
@@ -467,6 +475,43 @@ img {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.is-loading {
+  pointer-events: none;
+}
+
+.skeleton-row {
+  position: relative;
+  overflow: hidden;
+  min-height: 74px;
+  border-color: rgba(135, 168, 255, 0.14);
+}
+
+.skeleton-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      110deg,
+      rgba(255, 255, 255, 0.03) 8%,
+      rgba(126, 165, 255, 0.18) 18%,
+      rgba(255, 255, 255, 0.03) 33%
+    ),
+    rgba(255, 255, 255, 0.03);
+  background-size: 220% 100%;
+  animation: shimmer 1.35s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -20% 0;
+  }
 }
 
 @media (max-width: 1080px) {
