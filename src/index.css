@@ -86,6 +86,10 @@ img {
   gap: 18px;
 }
 
+.admin-layout {
+  display: grid;
+}
+
 .access-layout {
   display: grid;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
@@ -138,6 +142,20 @@ img {
 .dashboard-banner-copy {
   display: grid;
   gap: 18px;
+}
+
+.dashboard-topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.dashboard-nav {
+  display: inline-flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .dashboard-title {
@@ -374,6 +392,10 @@ img {
   grid-template-columns: minmax(0, 1.2fr) minmax(100px, 0.8fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr) minmax(180px, 1fr);
 }
 
+.admin-approval-row-wide {
+  grid-template-columns: minmax(0, 1.2fr) minmax(100px, 0.8fr) minmax(110px, 0.9fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr) minmax(180px, 1fr);
+}
+
 .admin-actions {
   display: flex;
   gap: 10px;
@@ -507,5 +529,10 @@ img {
   .admin-actions {
     justify-content: stretch;
     flex-direction: column;
+  }
+
+  .dashboard-topbar,
+  .dashboard-nav {
+    width: 100%;
   }
 }

@@ -148,6 +148,8 @@ function mapPendingWeeklyContribution(row) {
     weekKey: row.weekKey,
     status: row.status,
     paidAt: row.paidAt,
+    kind: row.kind,
+    label: row.label,
   }
 }
 
@@ -234,9 +236,33 @@ export async function initDatabase() {
       user_id BIGINT NOT NULL REFERENCES access_users(id) ON DELETE CASCADE,
       amount NUMERIC(12, 2) NOT NULL,
       note TEXT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reviewed_at TIMESTAMPTZ NULL,
+      reviewed_by BIGINT NULL REFERENCES access_users(id) ON DELETE SET NULL,
       paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `)
+
+  await pool.query(`
+    ALTER TABLE extra_contributions
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+  `)
+
+  await pool.query(`
+    ALTER TABLE extra_contributions
+    ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE extra_contributions
+    ADD COLUMN IF NOT EXISTS reviewed_by BIGINT NULL REFERENCES access_users(id) ON DELETE SET NULL
+  `)
+
+  await pool.query(`
+    UPDATE extra_contributions
+    SET status = 'approved'
+    WHERE status IS NULL OR status NOT IN ('pending', 'approved', 'denied')
   `)
 
   const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM access_users')
@@ -295,6 +321,7 @@ export async function initDatabase() {
           COUNT(*)::int AS extra_payment_count,
           MAX(paid_at) AS last_payment_at
         FROM extra_contributions
+        WHERE status = 'approved'
         GROUP BY user_id
       ) extra_data ON extra_data.user_id = weekly_data.user_id
       WHERE totals.user_id = COALESCE(weekly_data.user_id, extra_data.user_id)
@@ -558,7 +585,7 @@ export async function listRecentContributions(userId, limit = 6) {
           paid_at AS "paidAt",
           'extra' AS kind,
           'Dinero extra' AS label,
-          'approved' AS status
+          status
         FROM extra_contributions
         WHERE user_id = $1
       ) contributions
@@ -598,9 +625,6 @@ export async function recordContributionBundle(
     await ensureAccountTotals(client, userId)
 
     const createdPayments = []
-    let totalAmount = 0
-    let extraAmount = 0
-    let extraCount = 0
 
     if (includeWeeklyContribution) {
       const existingWeekly = await client.query(
@@ -670,54 +694,22 @@ export async function recordContributionBundle(
     if (hasExtraContribution) {
       const extraResult = await client.query(
         `
-          INSERT INTO extra_contributions (user_id, amount)
-          VALUES ($1, $2)
+          INSERT INTO extra_contributions (user_id, amount, status)
+          VALUES ($1, $2, 'pending')
           RETURNING
             id,
             amount::float8 AS amount,
             'Extra' AS "weekKey",
             paid_at AS "paidAt",
             'extra' AS kind,
-            'Dinero extra' AS label
+            'Dinero extra' AS label,
+            status
         `,
         [userId, normalizedExtraAmount],
       )
 
       createdPayments.push(mapContributionRow(extraResult.rows[0]))
-      totalAmount += normalizedExtraAmount
-      extraAmount += normalizedExtraAmount
-      extraCount += 1
     }
-
-    await client.query(
-      `
-        UPDATE account_totals
-        SET
-          total_contributed = total_contributed + $2,
-          weekly_total = weekly_total + 0,
-          extra_total = extra_total + $3,
-          payment_count = payment_count + $4,
-          weekly_payment_count = weekly_payment_count + 0,
-          extra_payment_count = extra_payment_count + $5,
-          last_payment_at = NOW(),
-          updated_at = NOW()
-        WHERE user_id = $1
-      `,
-      [userId, totalAmount, extraAmount, extraCount, extraCount],
-    )
-
-    await client.query(
-      `
-        UPDATE user_accounts
-        SET
-          total_contributed = total_contributed + $2,
-          payment_count = payment_count + $3,
-          last_payment_at = NOW(),
-          updated_at = NOW()
-        WHERE user_id = $1
-      `,
-      [userId, extraAmount, extraCount],
-    )
 
     await client.query('COMMIT')
 
@@ -745,44 +737,78 @@ export async function listPendingWeeklyContributions() {
   const pool = getPool()
   const result = await pool.query(
     `
-      SELECT
-        wc.id,
-        wc.user_id AS "userId",
-        CONCAT(users.first_name, ' ', users.last_name) AS "userName",
-        users.state_id AS "stateId",
-        wc.amount::float8 AS amount,
-        wc.week_key AS "weekKey",
-        wc.status,
-        wc.paid_at AS "paidAt"
-      FROM weekly_contributions wc
-      INNER JOIN access_users users ON users.id = wc.user_id
-      WHERE wc.status = 'pending'
-      ORDER BY wc.paid_at ASC
+      SELECT *
+      FROM (
+        SELECT
+          wc.id,
+          wc.user_id AS "userId",
+          CONCAT(users.first_name, ' ', users.last_name) AS "userName",
+          users.state_id AS "stateId",
+          wc.amount::float8 AS amount,
+          wc.week_key AS "weekKey",
+          wc.status,
+          wc.paid_at AS "paidAt",
+          'weekly' AS kind,
+          'Aporte semanal' AS label
+        FROM weekly_contributions wc
+        INNER JOIN access_users users ON users.id = wc.user_id
+        WHERE wc.status = 'pending'
+
+        UNION ALL
+
+        SELECT
+          ec.id,
+          ec.user_id AS "userId",
+          CONCAT(users.first_name, ' ', users.last_name) AS "userName",
+          users.state_id AS "stateId",
+          ec.amount::float8 AS amount,
+          'Extra' AS "weekKey",
+          ec.status,
+          ec.paid_at AS "paidAt",
+          'extra' AS kind,
+          'Dinero extra' AS label
+        FROM extra_contributions ec
+        INNER JOIN access_users users ON users.id = ec.user_id
+        WHERE ec.status = 'pending'
+      ) contributions
+      ORDER BY "paidAt" ASC
     `,
   )
 
   return result.rows.map(mapPendingWeeklyContribution)
 }
 
-export async function reviewWeeklyContribution({ contributionId, adminUserId, action }) {
+export async function reviewContribution({ contributionId, adminUserId, action, kind }) {
   const pool = getPool()
   const client = await pool.connect()
 
   try {
     await client.query('BEGIN')
-    await ensureAccountTotals(client, adminUserId)
 
     const contributionResult = await client.query(
-      `
-        SELECT
-          id,
-          user_id AS "userId",
-          amount::float8 AS amount,
-          status
-        FROM weekly_contributions
-        WHERE id = $1
-        LIMIT 1
-      `,
+      kind === 'weekly'
+        ? `
+            SELECT
+              id,
+              user_id AS "userId",
+              amount::float8 AS amount,
+              week_key AS "weekKey",
+              status
+            FROM weekly_contributions
+            WHERE id = $1
+            LIMIT 1
+          `
+        : `
+            SELECT
+              id,
+              user_id AS "userId",
+              amount::float8 AS amount,
+              'Extra' AS "weekKey",
+              status
+            FROM extra_contributions
+            WHERE id = $1
+            LIMIT 1
+          `,
       [contributionId],
     )
 
@@ -799,14 +825,23 @@ export async function reviewWeeklyContribution({ contributionId, adminUserId, ac
     const nextStatus = action === 'approve' ? 'approved' : 'denied'
 
     await client.query(
-      `
-        UPDATE weekly_contributions
-        SET
-          status = $2,
-          reviewed_at = NOW(),
-          reviewed_by = $3
-        WHERE id = $1
-      `,
+      kind === 'weekly'
+        ? `
+            UPDATE weekly_contributions
+            SET
+              status = $2,
+              reviewed_at = NOW(),
+              reviewed_by = $3
+            WHERE id = $1
+          `
+        : `
+            UPDATE extra_contributions
+            SET
+              status = $2,
+              reviewed_at = NOW(),
+              reviewed_by = $3
+            WHERE id = $1
+          `,
       [contributionId, nextStatus, adminUserId],
     )
 
@@ -819,14 +854,23 @@ export async function reviewWeeklyContribution({ contributionId, adminUserId, ac
           UPDATE account_totals
           SET
             total_contributed = total_contributed + $2,
-            weekly_total = weekly_total + $2,
+            weekly_total = weekly_total + $3,
+            extra_total = extra_total + $4,
             payment_count = payment_count + 1,
-            weekly_payment_count = weekly_payment_count + 1,
+            weekly_payment_count = weekly_payment_count + $5,
+            extra_payment_count = extra_payment_count + $6,
             last_payment_at = NOW(),
             updated_at = NOW()
           WHERE user_id = $1
         `,
-        [contribution.userId, contribution.amount],
+        [
+          contribution.userId,
+          contribution.amount,
+          kind === 'weekly' ? contribution.amount : 0,
+          kind === 'extra' ? contribution.amount : 0,
+          kind === 'weekly' ? 1 : 0,
+          kind === 'extra' ? 1 : 0,
+        ],
       )
 
       await client.query(
@@ -837,8 +881,8 @@ export async function reviewWeeklyContribution({ contributionId, adminUserId, ac
             payment_count = payment_count + 1,
             last_payment_at = NOW(),
             updated_at = NOW()
-          WHERE user_id = $1
-        `,
+        WHERE user_id = $1
+      `,
         [contribution.userId, contribution.amount],
       )
     }
@@ -846,6 +890,19 @@ export async function reviewWeeklyContribution({ contributionId, adminUserId, ac
     await client.query('COMMIT')
 
     return {
+      approvedPayment:
+        action === 'approve'
+          ? {
+              id: contributionId,
+              amount: toCurrencyNumber(contribution.amount),
+              weekKey: kind === 'weekly' ? contribution.weekKey ?? '' : 'Extra',
+              paidAt: new Date().toISOString(),
+              kind,
+              label: kind === 'weekly' ? 'Aporte semanal' : 'Dinero extra',
+              status: 'approved',
+            }
+          : null,
+      userId: contribution.userId,
       account: await getAccountSummary(contribution.userId),
       pendingContributions: await listPendingWeeklyContributions(),
       action: nextStatus,

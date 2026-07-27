@@ -27,6 +27,7 @@ import { motion } from 'framer-motion'
 import heroArt from '../3356B985-EEDA-4D78-BE8D-1DD8A9293B2A.png'
 
 type AccessMode = 'login' | 'register'
+type AppRoute = '/' | '/admin'
 
 type AccessStats = {
   totalUsers: number
@@ -63,6 +64,7 @@ type ContributionPayment = {
   paidAt: string
   kind: 'weekly' | 'extra'
   label: string
+  status: 'pending' | 'approved' | 'denied'
 }
 
 type AdminMemberTotal = {
@@ -81,6 +83,8 @@ type AdminPendingContribution = {
   weekKey: string
   status: 'pending' | 'approved' | 'denied'
   paidAt: string
+  kind: 'weekly' | 'extra'
+  label: string
 }
 
 type BootstrapResponse = {
@@ -174,7 +178,16 @@ function storeUserSession(user: AccessUser | null) {
   window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user))
 }
 
+function getCurrentRoute(): AppRoute {
+  if (typeof window === 'undefined') {
+    return '/'
+  }
+
+  return window.location.pathname === '/admin' ? '/admin' : '/'
+}
+
 function App() {
+  const [route, setRoute] = useState<AppRoute>(getCurrentRoute)
   const [mode, setMode] = useState<AccessMode>('login')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -189,18 +202,27 @@ function App() {
   const [account, setAccount] = useState<AccountSummary | null>(null)
   const [recentPayments, setRecentPayments] = useState<ContributionPayment[]>([])
   const [adminMembers, setAdminMembers] = useState<AdminMemberTotal[]>([])
-  const [pendingWeeklyApprovals, setPendingWeeklyApprovals] = useState<AdminPendingContribution[]>([])
+  const [pendingApprovals, setPendingApprovals] = useState<AdminPendingContribution[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingAccount, setIsLoadingAccount] = useState(false)
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false)
   const [isLoadingAdminTable, setIsLoadingAdminTable] = useState(false)
   const [isLoadingAdminApprovals, setIsLoadingAdminApprovals] = useState(false)
-  const [reviewingContributionId, setReviewingContributionId] = useState<number | null>(null)
+  const [reviewingContributionKey, setReviewingContributionKey] = useState<string | null>(null)
   const [isContributionModalOpen, setIsContributionModalOpen] = useState(false)
   const [includeWeeklyContribution, setIncludeWeeklyContribution] = useState(false)
   const [includeExtraContribution, setIncludeExtraContribution] = useState(false)
   const [extraContributionAmount, setExtraContributionAmount] = useState('')
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setRoute(getCurrentRoute())
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   useEffect(() => {
     const loadBootstrap = async () => {
@@ -211,7 +233,7 @@ function App() {
         void loadAccount(storedUser.id)
         if (storedUser.role === 'admin') {
           void loadAdminMembers(storedUser.id)
-          void loadPendingWeeklyApprovals(storedUser.id)
+          void loadPendingApprovals(storedUser.id)
         }
       }
 
@@ -238,6 +260,15 @@ function App() {
 
     void loadBootstrap()
   }, [])
+
+  const navigateTo = (nextRoute: AppRoute) => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.history.pushState({}, '', nextRoute)
+    setRoute(nextRoute)
+  }
 
   const loadAccount = async (userId: number) => {
     setIsLoadingAccount(true)
@@ -286,23 +317,23 @@ function App() {
     }
   }
 
-  const loadPendingWeeklyApprovals = async (userId: number) => {
+  const loadPendingApprovals = async (userId: number) => {
     setIsLoadingAdminApprovals(true)
 
     try {
-      const response = await fetch(`/api/admin/weekly-approvals/${userId}`)
+      const response = await fetch(`/api/admin/contribution-approvals/${userId}`)
       const data = (await response.json()) as AdminApprovalsResponse
 
       if (!response.ok || !data.ok || !data.contributions) {
-        throw new Error(data.message ?? 'No se pudo cargar la cola de cuotas pendientes.')
+        throw new Error(data.message ?? 'No se pudo cargar la cola de aportes pendientes.')
       }
 
-      setPendingWeeklyApprovals(data.contributions)
+      setPendingApprovals(data.contributions)
     } catch (error) {
       setAccountError(
-        error instanceof Error ? error.message : 'No se pudo cargar la cola de cuotas pendientes.',
+        error instanceof Error ? error.message : 'No se pudo cargar la cola de aportes pendientes.',
       )
-      setPendingWeeklyApprovals([])
+      setPendingApprovals([])
     } finally {
       setIsLoadingAdminApprovals(false)
     }
@@ -372,9 +403,7 @@ function App() {
 
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
 
@@ -399,11 +428,12 @@ function App() {
       await loadAccount(data.user.id)
       if (data.user.role === 'admin') {
         await loadAdminMembers(data.user.id)
-        await loadPendingWeeklyApprovals(data.user.id)
+        await loadPendingApprovals(data.user.id)
       } else {
         setAdminMembers([])
-        setPendingWeeklyApprovals([])
+        setPendingApprovals([])
       }
+      navigateTo('/')
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Error inesperado al procesar el acceso.',
@@ -413,7 +443,7 @@ function App() {
     }
   }
 
-  const handleWeeklyPayment = async () => {
+  const handleContributionSubmit = async () => {
     if (!currentUser || !account) {
       return
     }
@@ -424,9 +454,7 @@ function App() {
     try {
       const response = await fetch('/api/access/weekly-payment', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: currentUser.id,
           includeWeeklyContribution,
@@ -437,7 +465,7 @@ function App() {
       const data = (await response.json()) as AccountResponse
 
       if (!response.ok || !data.ok || !data.account) {
-        throw new Error(data.message ?? 'No se pudo registrar la cuota semanal.')
+        throw new Error(data.message ?? 'No se pudo registrar el aporte.')
       }
 
       setAccount(data.account)
@@ -447,58 +475,59 @@ function App() {
       setIncludeWeeklyContribution(false)
       setIncludeExtraContribution(false)
       setExtraContributionAmount('')
+
       if (currentUser.role === 'admin') {
         await loadAdminMembers(currentUser.id)
-        await loadPendingWeeklyApprovals(currentUser.id)
+        await loadPendingApprovals(currentUser.id)
       }
     } catch (error) {
       setAccountError(
-        error instanceof Error ? error.message : 'No se pudo registrar el dinero semanal.',
+        error instanceof Error ? error.message : 'No se pudo registrar el aporte.',
       )
     } finally {
       setIsRegisteringPayment(false)
     }
   }
 
-  const handleReviewWeeklyContribution = async (
-    contributionId: number,
+  const handleReviewContribution = async (
+    contribution: AdminPendingContribution,
     action: 'approve' | 'deny',
   ) => {
     if (!currentUser || currentUser.role !== 'admin') {
       return
     }
 
-    setReviewingContributionId(contributionId)
+    const contributionKey = `${contribution.kind}-${contribution.id}`
+    setReviewingContributionKey(contributionKey)
     setAccountError('')
 
     try {
-      const response = await fetch(`/api/admin/weekly-approvals/${contributionId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const response = await fetch(
+        `/api/admin/contribution-approvals/${contribution.kind}/${contribution.id}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            adminUserId: currentUser.id,
+            action,
+          }),
         },
-        body: JSON.stringify({
-          adminUserId: currentUser.id,
-          action,
-        }),
-      })
+      )
 
       const data = (await response.json()) as AdminApprovalsResponse
 
       if (!response.ok || !data.ok || !data.contributions) {
-        throw new Error(data.message ?? 'No se pudo revisar la cuota semanal.')
+        throw new Error(data.message ?? 'No se pudo revisar el aporte.')
       }
 
-      setPendingWeeklyApprovals(data.contributions)
+      setPendingApprovals(data.contributions)
       setAccountMessage(data.message)
       await loadAdminMembers(currentUser.id)
       await loadAccount(currentUser.id)
     } catch (error) {
-      setAccountError(
-        error instanceof Error ? error.message : 'No se pudo revisar la cuota semanal.',
-      )
+      setAccountError(error instanceof Error ? error.message : 'No se pudo revisar el aporte.')
     } finally {
-      setReviewingContributionId(null)
+      setReviewingContributionKey(null)
     }
   }
 
@@ -508,13 +537,14 @@ function App() {
     setAccount(null)
     setRecentPayments([])
     setAdminMembers([])
-    setPendingWeeklyApprovals([])
+    setPendingApprovals([])
     setAccountMessage('')
     setAccountError('')
     setFirstName('')
     setLastName('')
     setStateId('')
     setIsContributionModalOpen(false)
+    navigateTo('/')
   }
 
   const openContributionModal = () => {
@@ -529,11 +559,303 @@ function App() {
   }
 
   const closeContributionModal = () => {
-    if (isRegisteringPayment) {
-      return
+    if (!isRegisteringPayment) {
+      setIsContributionModalOpen(false)
+    }
+  }
+
+  const renderNavigation = () => {
+    if (!currentUser) {
+      return null
     }
 
-    setIsContributionModalOpen(false)
+    return (
+      <div className="dashboard-nav">
+        <Button
+          variant={route === '/' ? 'solid' : 'soft'}
+          size="2"
+          onClick={() => navigateTo('/')}
+        >
+          Mi cuenta
+        </Button>
+        {currentUser.role === 'admin' ? (
+          <Button
+            variant={route === '/admin' ? 'solid' : 'soft'}
+            size="2"
+            onClick={() => navigateTo('/admin')}
+          >
+            Admin
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const renderMemberPage = () => {
+    if (!currentUser) {
+      return null
+    }
+
+    return (
+      <motion.section className="dashboard-layout" {...panelMotion}>
+      <Card className="glow-card dashboard-account-card">
+        <Flex direction="column" gap="5">
+          <div>
+            <Badge size="3" radius="full" className="hero-kicker">
+              Cuenta semanal
+            </Badge>
+            <Heading size="8" className="access-title">
+              Estado total y aporte de la semana.
+            </Heading>
+            <Text as="p" size="3" className="access-copy">
+              Abre el popup para registrar aporte semanal y dinero extra. Ambos quedaran
+              pendientes hasta que el admin los apruebe.
+            </Text>
+          </div>
+
+          {accountError ? <p className="hero-error access-feedback">{accountError}</p> : null}
+          {accountMessage ? (
+            <p className="hero-success access-feedback success">{accountMessage}</p>
+          ) : null}
+
+          <Grid columns={{ initial: '1', md: '3' }} gap="3">
+            <Card className="mini-info-card account-stat-card">
+              <span className="section-icon">
+                <Wallet size={18} />
+              </span>
+              <strong>
+                {account ? currencyFormatter.format(account.totalContributed) : '$0.00'}
+              </strong>
+              <p>estado de cuenta total aprobado.</p>
+            </Card>
+
+            <Card className="mini-info-card account-stat-card">
+              <span className="section-icon">
+                <Banknote size={18} />
+              </span>
+              <strong>{account?.paymentCount ?? 0}</strong>
+              <p>aportes aprobados registrados hasta hoy.</p>
+            </Card>
+
+            <Card className="mini-info-card account-stat-card">
+              <span className="section-icon">
+                <CalendarDays size={18} />
+              </span>
+              <strong>{account?.currentWeekKey ?? 'Sin semana'}</strong>
+              <p>
+                {account?.currentWeekStatus === 'approved'
+                  ? 'la semana actual ya tiene aporte semanal aprobado.'
+                  : account?.currentWeekStatus === 'pending'
+                    ? 'la semana actual tiene una cuota pendiente de aprobacion.'
+                    : 'la semana actual todavia no tiene aporte semanal.'}
+              </p>
+            </Card>
+          </Grid>
+
+          <Flex direction={{ initial: 'column', sm: 'row' }} gap="3">
+            <Button
+              size="4"
+              className="weekly-pay-button"
+              disabled={isLoadingAccount || isRegisteringPayment}
+              onClick={openContributionModal}
+            >
+              {isRegisteringPayment ? 'Registrando...' : 'Dar dinero'}
+            </Button>
+
+            <Card className="mini-info-card account-aside-card">
+              <strong>Aporte semanal fijo</strong>
+              <p>
+                {account
+                  ? currencyFormatter.format(account.weeklyContributionAmount)
+                  : currencyFormatter.format(1500)}
+              </p>
+            </Card>
+          </Flex>
+
+          <Separator size="4" />
+
+          <Grid columns={{ initial: '1', md: '2' }} gap="4">
+            <Card className="mini-info-card recent-payments-card">
+              <strong>Movimientos recientes</strong>
+              <div className="payment-list">
+                {recentPayments.length ? (
+                  recentPayments.map((payment) => (
+                    <div key={`${payment.kind}-${payment.id}`} className="payment-row">
+                      <div>
+                        <span>
+                          {payment.label} · {payment.weekKey} · {payment.status}
+                        </span>
+                        <small>{dateFormatter.format(new Date(payment.paidAt))}</small>
+                      </div>
+                      <strong>{currencyFormatter.format(payment.amount)}</strong>
+                    </div>
+                  ))
+                ) : (
+                  <p>No hay movimientos registrados todavia.</p>
+                )}
+              </div>
+            </Card>
+
+            <Card className="mini-info-card recent-payments-card">
+              <strong>Estado del miembro</strong>
+              <div className="member-summary">
+                <div>
+                  <span>Ultimo pago aprobado</span>
+                  <p>
+                    {account?.lastPaymentAt
+                      ? dateFormatter.format(new Date(account.lastPaymentAt))
+                      : 'Todavia no hay pagos aprobados'}
+                  </p>
+                </div>
+                <div>
+                  <span>Usuario</span>
+                  <p>{currentUser.fullName}</p>
+                </div>
+                <div>
+                  <span>State ID</span>
+                  <p>{currentUser.stateId}</p>
+                </div>
+              </div>
+            </Card>
+          </Grid>
+        </Flex>
+      </Card>
+
+      <Card className="hero-art-card dashboard-art-card">
+        <Inset clip="padding-box" side="all" pb="current">
+          <img src={heroArt} alt="Graffiti Black Oaths" className="hero-art" />
+        </Inset>
+        <div className="art-overlay-copy">
+          <Badge size="3" radius="full" className="hero-kicker">
+            Weekly Control
+          </Badge>
+          <Heading size="8" className="overlay-title">
+            Caja semanal.
+          </Heading>
+          <Text as="p" size="3" className="overlay-body">
+            Todos los aportes quedan pendientes hasta la aprobacion del admin.
+          </Text>
+        </div>
+      </Card>
+      </motion.section>
+    )
+  }
+
+  const renderAdminPage = () => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      return (
+        <motion.section {...panelMotion}>
+          <Card className="glow-card dashboard-account-card">
+            <p className="hero-error">Solo el rol admin puede entrar a esta pagina.</p>
+          </Card>
+        </motion.section>
+      )
+    }
+
+    return (
+      <motion.section className="admin-layout" {...panelMotion}>
+        <Card className="glow-card dashboard-account-card">
+          <Flex direction="column" gap="5">
+            <div>
+              <Badge size="3" radius="full" className="hero-kicker">
+                Admin approvals
+              </Badge>
+              <Heading size="8" className="access-title">
+                Aprobar o denegar aportes.
+              </Heading>
+              <Text as="p" size="3" className="access-copy">
+                Aqui el admin decide si aprobar o denegar cuotas semanales y dinero extra.
+              </Text>
+            </div>
+
+            {accountError ? <p className="hero-error access-feedback">{accountError}</p> : null}
+            {accountMessage ? (
+              <p className="hero-success access-feedback success">{accountMessage}</p>
+            ) : null}
+
+            <Card className="mini-info-card recent-payments-card">
+              <strong>Aportes pendientes</strong>
+              <div className="admin-table">
+                <div className="admin-table-row admin-table-head admin-approval-row">
+                  <span>User name</span>
+                  <span>State ID</span>
+                  <span>Tipo</span>
+                  <span>Semana</span>
+                  <span>Monto</span>
+                  <span>Acciones</span>
+                </div>
+
+                {isLoadingAdminApprovals ? (
+                  <p>Cargando aportes pendientes...</p>
+                ) : pendingApprovals.length ? (
+                  pendingApprovals.map((contribution) => {
+                    const contributionKey = `${contribution.kind}-${contribution.id}`
+                    return (
+                      <div
+                        key={contributionKey}
+                        className="admin-table-row admin-approval-row admin-approval-row-wide"
+                      >
+                        <span>{contribution.userName}</span>
+                        <span>{contribution.stateId}</span>
+                        <span>{contribution.label}</span>
+                        <span>{contribution.weekKey}</span>
+                        <strong>{currencyFormatter.format(contribution.amount)}</strong>
+                        <div className="admin-actions">
+                          <Button
+                            size="2"
+                            color="green"
+                            disabled={reviewingContributionKey === contributionKey}
+                            onClick={() => handleReviewContribution(contribution, 'approve')}
+                          >
+                            Aceptar
+                          </Button>
+                          <Button
+                            size="2"
+                            color="red"
+                            variant="soft"
+                            disabled={reviewingContributionKey === contributionKey}
+                            onClick={() => handleReviewContribution(contribution, 'deny')}
+                          >
+                            Denegar
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <p>No hay aportes pendientes.</p>
+                )}
+              </div>
+            </Card>
+
+            <Card className="mini-info-card recent-payments-card">
+              <strong>Tabla administrativa</strong>
+              <div className="admin-table">
+                <div className="admin-table-row admin-table-head">
+                  <span>User name</span>
+                  <span>State ID</span>
+                  <span>Total aported</span>
+                </div>
+
+                {isLoadingAdminTable ? (
+                  <p>Cargando tabla administrativa...</p>
+                ) : adminMembers.length ? (
+                  adminMembers.map((member) => (
+                    <div key={member.id} className="admin-table-row">
+                      <span>{member.userName}</span>
+                      <span>{member.stateId}</span>
+                      <strong>{currencyFormatter.format(member.totalAported)}</strong>
+                    </div>
+                  ))
+                ) : (
+                  <p>No hay miembros para mostrar todavia.</p>
+                )}
+              </div>
+            </Card>
+          </Flex>
+        </Card>
+      </motion.section>
+    )
   }
 
   if (currentUser) {
@@ -544,9 +866,13 @@ function App() {
           <motion.section className="dashboard-hero" {...panelMotion}>
             <Card className="hero-art-card dashboard-banner">
               <div className="dashboard-banner-copy">
-                <Badge size="3" radius="full" className="hero-kicker">
-                  MEMBER ACCOUNT
-                </Badge>
+                <div className="dashboard-topbar">
+                  <Badge size="3" radius="full" className="hero-kicker">
+                    {route === '/admin' ? 'ADMIN PANEL' : 'MEMBER ACCOUNT'}
+                  </Badge>
+                  {renderNavigation()}
+                </div>
+
                 <Flex justify="between" align="start" gap="4" wrap="wrap">
                   <div>
                     <Heading size="8" className="dashboard-title">
@@ -566,235 +892,10 @@ function App() {
             </Card>
           </motion.section>
 
-          <motion.section className="dashboard-layout" {...panelMotion}>
-            <Card className="glow-card dashboard-account-card">
-              <Flex direction="column" gap="5">
-                <div>
-                  <Badge size="3" radius="full" className="hero-kicker">
-                    Cuenta semanal
-                  </Badge>
-                  <Heading size="8" className="access-title">
-                    Estado total y aporte de la semana.
-                  </Heading>
-                  <Text as="p" size="3" className="access-copy">
-                    Abre el popup para marcar aporte semanal entregado y agregar dinero extra si
-                    hace falta. El boton sigue disponible aunque la semana ya este cubierta.
-                  </Text>
-                </div>
-
-                {accountError ? <p className="hero-error access-feedback">{accountError}</p> : null}
-                {accountMessage ? (
-                  <p className="hero-success access-feedback success">{accountMessage}</p>
-                ) : null}
-
-                <Grid columns={{ initial: '1', md: '3' }} gap="3">
-                  <Card className="mini-info-card account-stat-card">
-                    <span className="section-icon">
-                      <Wallet size={18} />
-                    </span>
-                    <strong>
-                      {account ? currencyFormatter.format(account.totalContributed) : '$0.00'}
-                    </strong>
-                    <p>estado de cuenta total acumulado.</p>
-                  </Card>
-
-                  <Card className="mini-info-card account-stat-card">
-                    <span className="section-icon">
-                      <Banknote size={18} />
-                    </span>
-                    <strong>{account?.paymentCount ?? 0}</strong>
-                    <p>pagos y extras registrados hasta hoy.</p>
-                  </Card>
-
-                  <Card className="mini-info-card account-stat-card">
-                    <span className="section-icon">
-                      <CalendarDays size={18} />
-                    </span>
-                    <strong>{account?.currentWeekKey ?? 'Sin semana'}</strong>
-                    <p>
-                      {account?.currentWeekStatus === 'approved'
-                        ? 'la semana actual ya tiene aporte semanal aprobado.'
-                        : account?.currentWeekStatus === 'pending'
-                          ? 'la semana actual tiene una cuota pendiente de aprobacion.'
-                          : 'la semana actual todavia no tiene aporte semanal.'}
-                    </p>
-                  </Card>
-                </Grid>
-
-                <Flex direction={{ initial: 'column', sm: 'row' }} gap="3">
-                  <Button
-                    size="4"
-                    className="weekly-pay-button"
-                    disabled={isLoadingAccount || isRegisteringPayment}
-                    onClick={openContributionModal}
-                  >
-                    {isRegisteringPayment ? 'Registrando...' : 'Dar dinero'}
-                  </Button>
-
-                  <Card className="mini-info-card account-aside-card">
-                    <strong>Aporte semanal fijo</strong>
-                    <p>
-                      {account
-                        ? currencyFormatter.format(account.weeklyContributionAmount)
-                        : currencyFormatter.format(1500)}
-                    </p>
-                  </Card>
-                </Flex>
-
-                <Separator size="4" />
-
-                <Grid columns={{ initial: '1', md: '2' }} gap="4">
-                  <Card className="mini-info-card recent-payments-card">
-                    <strong>Movimientos recientes</strong>
-                    <div className="payment-list">
-                      {recentPayments.length ? (
-                        recentPayments.map((payment) => (
-                          <div key={`${payment.kind}-${payment.id}`} className="payment-row">
-                            <div>
-                              <span>
-                                {payment.label} · {payment.weekKey}
-                              </span>
-                              <small>{dateFormatter.format(new Date(payment.paidAt))}</small>
-                            </div>
-                            <strong>{currencyFormatter.format(payment.amount)}</strong>
-                          </div>
-                        ))
-                      ) : (
-                        <p>No hay pagos semanales registrados todavia.</p>
-                      )}
-                    </div>
-                  </Card>
-
-                  <Card className="mini-info-card recent-payments-card">
-                    <strong>Estado del miembro</strong>
-                    <div className="member-summary">
-                      <div>
-                        <span>Ultimo pago</span>
-                        <p>
-                          {account?.lastPaymentAt
-                            ? dateFormatter.format(new Date(account.lastPaymentAt))
-                            : 'Todavia no hay pagos'}
-                        </p>
-                      </div>
-                      <div>
-                        <span>Usuario</span>
-                        <p>{currentUser.fullName}</p>
-                      </div>
-                      <div>
-                        <span>State ID</span>
-                        <p>{currentUser.stateId}</p>
-                      </div>
-                    </div>
-                  </Card>
-                </Grid>
-
-                {currentUser.role === 'admin' ? (
-                  <>
-                    <Separator size="4" />
-                    <Card className="mini-info-card recent-payments-card">
-                      <strong>Cuotas semanales pendientes</strong>
-                      <div className="admin-table">
-                        <div className="admin-table-row admin-table-head admin-approval-row">
-                          <span>User name</span>
-                          <span>State ID</span>
-                          <span>Semana</span>
-                          <span>Monto</span>
-                          <span>Acciones</span>
-                        </div>
-
-                        {isLoadingAdminApprovals ? (
-                          <p>Cargando cuotas pendientes...</p>
-                        ) : pendingWeeklyApprovals.length ? (
-                          pendingWeeklyApprovals.map((contribution) => (
-                            <div
-                              key={contribution.id}
-                              className="admin-table-row admin-approval-row"
-                            >
-                              <span>{contribution.userName}</span>
-                              <span>{contribution.stateId}</span>
-                              <span>{contribution.weekKey}</span>
-                              <strong>{currencyFormatter.format(contribution.amount)}</strong>
-                              <div className="admin-actions">
-                                <Button
-                                  size="2"
-                                  color="green"
-                                  disabled={reviewingContributionId === contribution.id}
-                                  onClick={() =>
-                                    handleReviewWeeklyContribution(contribution.id, 'approve')
-                                  }
-                                >
-                                  Aceptar
-                                </Button>
-                                <Button
-                                  size="2"
-                                  color="red"
-                                  variant="soft"
-                                  disabled={reviewingContributionId === contribution.id}
-                                  onClick={() =>
-                                    handleReviewWeeklyContribution(contribution.id, 'deny')
-                                  }
-                                >
-                                  Denegar
-                                </Button>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <p>No hay cuotas semanales pendientes.</p>
-                        )}
-                      </div>
-                    </Card>
-
-                    <Card className="mini-info-card recent-payments-card">
-                      <strong>Tabla administrativa</strong>
-                      <div className="admin-table">
-                        <div className="admin-table-row admin-table-head">
-                          <span>User name</span>
-                          <span>State ID</span>
-                          <span>Total aported</span>
-                        </div>
-
-                        {isLoadingAdminTable ? (
-                          <p>Cargando tabla administrativa...</p>
-                        ) : adminMembers.length ? (
-                          adminMembers.map((member) => (
-                            <div key={member.id} className="admin-table-row">
-                              <span>{member.userName}</span>
-                              <span>{member.stateId}</span>
-                              <strong>{currencyFormatter.format(member.totalAported)}</strong>
-                            </div>
-                          ))
-                        ) : (
-                          <p>No hay miembros para mostrar todavia.</p>
-                        )}
-                      </div>
-                    </Card>
-                  </>
-                ) : null}
-              </Flex>
-            </Card>
-
-            <Card className="hero-art-card dashboard-art-card">
-              <Inset clip="padding-box" side="all" pb="current">
-                <img src={heroArt} alt="Graffiti Black Oaths" className="hero-art" />
-              </Inset>
-              <div className="art-overlay-copy">
-                <Badge size="3" radius="full" className="hero-kicker">
-                  Weekly Control
-                </Badge>
-                <Heading size="8" className="overlay-title">
-                  Caja semanal.
-                </Heading>
-                <Text as="p" size="3" className="overlay-body">
-                  El popup guarda el aporte semanal, el dinero extra, o ambos, y los agrega al
-                  estado total del miembro.
-                </Text>
-              </div>
-            </Card>
-          </motion.section>
+          {route === '/admin' ? renderAdminPage() : renderMemberPage()}
         </Section>
 
-        {isContributionModalOpen ? (
+        {route === '/' && isContributionModalOpen ? (
           <div className="contribution-modal-backdrop" onClick={closeContributionModal}>
             <div className="contribution-modal" onClick={(event) => event.stopPropagation()}>
               <Badge size="3" radius="full" className="hero-kicker">
@@ -805,7 +906,7 @@ function App() {
               </Heading>
               <Text as="p" size="2" className="access-copy">
                 Marca el aporte semanal entregado y activa dinero extra entregado si necesitas
-                sumar una cantidad adicional.
+                sumar una cantidad adicional. Todo quedara pendiente de aprobacion del admin.
               </Text>
 
               <label className="contribution-check">
@@ -825,7 +926,7 @@ function App() {
                       ? `La semana ${account.currentWeekKey} ya fue aprobada.`
                       : account?.currentWeekStatus === 'pending'
                         ? `La semana ${account.currentWeekKey} esta esperando revision del admin.`
-                      : weeklyButtonLabel}
+                        : weeklyButtonLabel}
                   </small>
                 </span>
               </label>
@@ -838,7 +939,7 @@ function App() {
                 />
                 <span>
                   Dinero extra entregado
-                  <small>Puedes sumar cualquier monto adicional al estado total.</small>
+                  <small>Tambien quedara pendiente hasta la aprobacion del admin.</small>
                 </span>
               </label>
 
@@ -861,7 +962,7 @@ function App() {
                 <Button variant="soft" color="gray" size="3" onClick={closeContributionModal}>
                   Cancelar
                 </Button>
-                <Button size="3" disabled={isRegisteringPayment} onClick={handleWeeklyPayment}>
+                <Button size="3" disabled={isRegisteringPayment} onClick={handleContributionSubmit}>
                   {isRegisteringPayment ? 'Guardando...' : 'Guardar aporte'}
                 </Button>
               </div>

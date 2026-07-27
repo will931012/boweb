@@ -13,7 +13,7 @@ import {
   listRecentContributions,
   listUsers,
   recordContributionBundle,
-  reviewWeeklyContribution,
+  reviewContribution,
   WEEKLY_CONTRIBUTION_AMOUNT,
   updateLastLogin,
 } from './db.js'
@@ -63,6 +63,7 @@ const serializeAccount = (account) => ({
   lastPaymentAt: account.lastPaymentAt,
   weeklyContributionAmount: account.weeklyContributionAmount,
   currentWeekPaid: account.currentWeekPaid,
+  currentWeekStatus: account.currentWeekStatus,
   currentWeekKey: account.currentWeekKey,
 })
 
@@ -257,7 +258,7 @@ app.get('/api/admin/member-totals/:userId', async (request, response) => {
   }
 })
 
-app.get('/api/admin/weekly-approvals/:userId', async (request, response) => {
+app.get('/api/admin/contribution-approvals/:userId', async (request, response) => {
   if (!ensureDatabaseReady(response)) {
     return
   }
@@ -286,7 +287,7 @@ app.get('/api/admin/weekly-approvals/:userId', async (request, response) => {
     if (user.role !== 'admin') {
       response.status(403).json({
         ok: false,
-        message: 'Solo el rol admin puede revisar cuotas semanales.',
+        message: 'Solo el rol admin puede revisar aportes pendientes.',
       })
       return
     }
@@ -295,13 +296,13 @@ app.get('/api/admin/weekly-approvals/:userId', async (request, response) => {
 
     response.json({
       ok: true,
-      message: 'Cola de cuotas pendientes cargada.',
+      message: 'Cola de aportes pendientes cargada.',
       contributions,
     })
   } catch (error) {
     response.status(500).json({
       ok: false,
-      message: error instanceof Error ? error.message : 'No se pudo cargar la cola de aprobaciones.',
+      message: error instanceof Error ? error.message : 'No se pudo cargar la cola de aportes pendientes.',
     })
   }
 })
@@ -438,27 +439,6 @@ app.post('/api/access/weekly-payment', async (request, response) => {
       payments: result.payments,
       recentPayments: result.recentPayments,
     })
-
-    if (result.account) {
-      const user = await findUserById(userId)
-
-      void notifyDiscordContribution({
-        user: user ? serializeUser(user) : {
-          id: userId,
-          firstName: 'Miembro',
-          lastName: '',
-          fullName: 'Miembro',
-          stateId: 'N/A',
-          role: 'miembro',
-          createdAt: new Date().toISOString(),
-          lastLoginAt: null,
-        },
-        account: result.account,
-        payments: result.payments,
-      }).catch((error) => {
-        console.error('No se pudo enviar la notificacion a Discord:', error)
-      })
-    }
   } catch (error) {
     if (error instanceof Error && error.name === 'DUPLICATE_WEEKLY_PAYMENT') {
       response.status(409).json({
@@ -475,16 +455,17 @@ app.post('/api/access/weekly-payment', async (request, response) => {
   }
 })
 
-app.post('/api/admin/weekly-approvals/:contributionId', async (request, response) => {
+app.post('/api/admin/contribution-approvals/:kind/:contributionId', async (request, response) => {
   if (!ensureDatabaseReady(response)) {
     return
   }
 
   const contributionId = normalizeUserId(request.params.contributionId)
   const adminUserId = normalizeUserId(request.body?.adminUserId)
+  const kind = request.params.kind === 'extra' ? 'extra' : request.params.kind === 'weekly' ? 'weekly' : null
   const action = request.body?.action === 'deny' ? 'deny' : request.body?.action === 'approve' ? 'approve' : null
 
-  if (!contributionId || !adminUserId || !action) {
+  if (!contributionId || !adminUserId || !action || !kind) {
     response.status(400).json({
       ok: false,
       message: 'Datos de revision invalidos.',
@@ -498,26 +479,41 @@ app.post('/api/admin/weekly-approvals/:contributionId', async (request, response
     if (!adminUser || adminUser.role !== 'admin') {
       response.status(403).json({
         ok: false,
-        message: 'Solo el rol admin puede aceptar o denegar cuotas.',
+        message: 'Solo el rol admin puede aceptar o denegar aportes.',
       })
       return
     }
 
-    const result = await reviewWeeklyContribution({
+    const result = await reviewContribution({
       contributionId,
       adminUserId,
       action,
+      kind,
     })
 
     response.json({
       ok: true,
       message:
         action === 'approve'
-          ? 'Cuota semanal aprobada correctamente.'
-          : 'Cuota semanal denegada correctamente.',
+          ? 'Aporte aprobado correctamente.'
+          : 'Aporte denegado correctamente.',
       account: result.account ? serializeAccount(result.account) : null,
       contributions: result.pendingContributions,
     })
+
+    if (action === 'approve' && result.account && result.approvedPayment) {
+      const approvedUser = await findUserById(result.userId)
+
+      if (approvedUser) {
+        void notifyDiscordContribution({
+          user: serializeUser(approvedUser),
+          account: result.account,
+          payments: [result.approvedPayment],
+        }).catch((error) => {
+          console.error('No se pudo enviar la notificacion a Discord:', error)
+        })
+      }
+    }
   } catch (error) {
     response.status(500).json({
       ok: false,
