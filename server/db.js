@@ -2,22 +2,32 @@ import pg from 'pg'
 
 const { Pool } = pg
 
-const connectionString = process.env.DATABASE_URL
+let pool = null
 
-if (!connectionString) {
-  throw new Error('DATABASE_URL no esta definido. Configura la base de datos de Railway.')
+function getPool() {
+  if (pool) {
+    return pool
+  }
+
+  const connectionString = process.env.DATABASE_URL
+
+  if (!connectionString) {
+    throw new Error('DATABASE_URL no esta definido. Configura la base de datos antes de iniciar la API.')
+  }
+
+  const needsSsl = !/localhost|127\.0\.0\.1/i.test(connectionString)
+
+  pool = new Pool({
+    connectionString,
+    ssl: needsSsl
+      ? {
+          rejectUnauthorized: false,
+        }
+      : false,
+  })
+
+  return pool
 }
-
-const needsSsl = !/localhost|127\.0\.0\.1/i.test(connectionString)
-
-export const pool = new Pool({
-  connectionString,
-  ssl: needsSsl
-    ? {
-        rejectUnauthorized: false,
-      }
-    : false,
-})
 
 const seedUsers = [
   {
@@ -47,6 +57,8 @@ const seedUsers = [
 ]
 
 export async function initDatabase() {
+  const pool = getPool()
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS access_users (
       id BIGSERIAL PRIMARY KEY,
@@ -77,6 +89,7 @@ export async function initDatabase() {
 }
 
 export async function listUsers() {
+  const pool = getPool()
   const result = await pool.query(`
     SELECT
       id,
@@ -94,6 +107,7 @@ export async function listUsers() {
 }
 
 export async function findUserByLogin(firstName, stateId) {
+  const pool = getPool()
   const result = await pool.query(
     `
       SELECT
@@ -116,6 +130,7 @@ export async function findUserByLogin(firstName, stateId) {
 }
 
 export async function findUserByStateId(stateId) {
+  const pool = getPool()
   const result = await pool.query(
     `
       SELECT
@@ -137,6 +152,7 @@ export async function findUserByStateId(stateId) {
 }
 
 export async function createUser({ firstName, lastName, stateId, role = 'miembro' }) {
+  const pool = getPool()
   const result = await pool.query(
     `
       INSERT INTO access_users (first_name, last_name, state_id, role)
@@ -157,6 +173,7 @@ export async function createUser({ firstName, lastName, stateId, role = 'miembro
 }
 
 export async function updateLastLogin(userId) {
+  const pool = getPool()
   const result = await pool.query(
     `
       UPDATE access_users
