@@ -60,7 +60,7 @@ const seedUsers = [
     firstName: 'Matias',
     lastName: 'Roldan',
     stateId: 'BO-2047',
-    role: 'jefe',
+    role: 'admin',
     createdAt: '2026-07-21T15:20:00.000Z',
     lastLoginAt: '2026-07-26T13:10:00.000Z',
   },
@@ -121,6 +121,7 @@ function mapAccountSummary(row) {
     lastPaymentAt: row.lastPaymentAt,
     weeklyContributionAmount: toCurrencyNumber(row.weeklyContributionAmount),
     currentWeekPaid: row.currentWeekPaid,
+    currentWeekStatus: row.currentWeekStatus ?? 'none',
     currentWeekKey: row.currentWeekKey,
   }
 }
@@ -133,6 +134,20 @@ function mapContributionRow(row) {
     paidAt: row.paidAt,
     kind: row.kind,
     label: row.label,
+    status: row.status ?? 'approved',
+  }
+}
+
+function mapPendingWeeklyContribution(row) {
+  return {
+    id: row.id,
+    userId: row.userId,
+    userName: row.userName,
+    stateId: row.stateId,
+    amount: toCurrencyNumber(row.amount),
+    weekKey: row.weekKey,
+    status: row.status,
+    paidAt: row.paidAt,
   }
 }
 
@@ -183,10 +198,34 @@ export async function initDatabase() {
       user_id BIGINT NOT NULL REFERENCES access_users(id) ON DELETE CASCADE,
       amount NUMERIC(12, 2) NOT NULL,
       week_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      reviewed_at TIMESTAMPTZ NULL,
+      reviewed_by BIGINT NULL REFERENCES access_users(id) ON DELETE SET NULL,
       paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_id, week_key)
     )
+  `)
+
+  await pool.query(`
+    ALTER TABLE weekly_contributions
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'
+  `)
+
+  await pool.query(`
+    ALTER TABLE weekly_contributions
+    ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL
+  `)
+
+  await pool.query(`
+    ALTER TABLE weekly_contributions
+    ADD COLUMN IF NOT EXISTS reviewed_by BIGINT NULL REFERENCES access_users(id) ON DELETE SET NULL
+  `)
+
+  await pool.query(`
+    UPDATE weekly_contributions
+    SET status = 'approved'
+    WHERE status IS NULL OR status NOT IN ('pending', 'approved', 'denied')
   `)
 
   await pool.query(`
@@ -203,6 +242,13 @@ export async function initDatabase() {
   const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM access_users')
 
   if (rows[0]?.count > 0) {
+    await pool.query(`
+      UPDATE access_users
+      SET role = 'admin'
+      WHERE state_id = 'BO-2047'
+        AND role <> 'admin'
+    `)
+
     await pool.query(`
       INSERT INTO user_accounts (user_id)
       SELECT id
@@ -239,6 +285,7 @@ export async function initDatabase() {
           COUNT(*)::int AS weekly_payment_count,
           MAX(paid_at) AS last_payment_at
         FROM weekly_contributions
+        WHERE status = 'approved'
         GROUP BY user_id
       ) weekly_data
       FULL OUTER JOIN (
@@ -369,6 +416,33 @@ export async function findUserById(userId) {
   return result.rows[0] ?? null
 }
 
+export async function listMemberTotals() {
+  const pool = getPool()
+  const result = await pool.query(
+    `
+      SELECT
+        users.id,
+        users.first_name AS "firstName",
+        users.last_name AS "lastName",
+        users.state_id AS "stateId",
+        CONCAT(users.first_name, ' ', users.last_name) AS "fullName",
+        totals.total_contributed::float8 AS "totalAported"
+      FROM access_users users
+      INNER JOIN account_totals totals ON totals.user_id = users.id
+      ORDER BY totals.total_contributed DESC, users.created_at ASC
+    `,
+  )
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    fullName: row.fullName.trim(),
+    stateId: row.stateId,
+    totalAported: toCurrencyNumber(row.totalAported),
+  }))
+}
+
 export async function createUser({ firstName, lastName, stateId, role = 'miembro' }) {
   const pool = getPool()
   const result = await pool.query(
@@ -434,7 +508,15 @@ export async function getAccountSummary(userId) {
           FROM weekly_contributions wc
           WHERE wc.user_id = totals.user_id
             AND wc.week_key = $3
+            AND wc.status = 'approved'
         ) AS "currentWeekPaid",
+        COALESCE((
+          SELECT wc.status
+          FROM weekly_contributions wc
+          WHERE wc.user_id = totals.user_id
+            AND wc.week_key = $3
+          LIMIT 1
+        ), 'none') AS "currentWeekStatus",
         $3 AS "currentWeekKey"
       FROM account_totals totals
       WHERE totals.user_id = $1
@@ -462,7 +544,8 @@ export async function listRecentContributions(userId, limit = 6) {
           week_key AS "weekKey",
           paid_at AS "paidAt",
           'weekly' AS kind,
-          'Aporte semanal' AS label
+          'Aporte semanal' AS label,
+          status
         FROM weekly_contributions
         WHERE user_id = $1
 
@@ -474,7 +557,8 @@ export async function listRecentContributions(userId, limit = 6) {
           'Extra' AS "weekKey",
           paid_at AS "paidAt",
           'extra' AS kind,
-          'Dinero extra' AS label
+          'Dinero extra' AS label,
+          'approved' AS status
         FROM extra_contributions
         WHERE user_id = $1
       ) contributions
@@ -515,31 +599,72 @@ export async function recordContributionBundle(
 
     const createdPayments = []
     let totalAmount = 0
-    let weeklyAmount = 0
     let extraAmount = 0
-    let weeklyCount = 0
     let extraCount = 0
 
     if (includeWeeklyContribution) {
-      const weeklyResult = await client.query(
+      const existingWeekly = await client.query(
         `
-          INSERT INTO weekly_contributions (user_id, amount, week_key)
-          VALUES ($1, $2, $3)
-          RETURNING
-            id,
-            amount::float8 AS amount,
-            week_key AS "weekKey",
-            paid_at AS "paidAt",
-            'weekly' AS kind,
-            'Aporte semanal' AS label
+          SELECT id, status
+          FROM weekly_contributions
+          WHERE user_id = $1
+            AND week_key = $2
+          LIMIT 1
         `,
-        [userId, WEEKLY_CONTRIBUTION_AMOUNT, weekKey],
+        [userId, weekKey],
       )
 
+      let weeklyResult
+
+      if (!existingWeekly.rows[0]) {
+        weeklyResult = await client.query(
+          `
+            INSERT INTO weekly_contributions (user_id, amount, week_key, status)
+            VALUES ($1, $2, $3, 'pending')
+            RETURNING
+              id,
+              amount::float8 AS amount,
+              week_key AS "weekKey",
+              paid_at AS "paidAt",
+              'weekly' AS kind,
+              'Aporte semanal' AS label,
+              status
+          `,
+          [userId, WEEKLY_CONTRIBUTION_AMOUNT, weekKey],
+        )
+      } else if (existingWeekly.rows[0].status === 'denied') {
+        weeklyResult = await client.query(
+          `
+            UPDATE weekly_contributions
+            SET
+              amount = $2,
+              status = 'pending',
+              reviewed_at = NULL,
+              reviewed_by = NULL,
+              paid_at = NOW()
+            WHERE id = $1
+            RETURNING
+              id,
+              amount::float8 AS amount,
+              week_key AS "weekKey",
+              paid_at AS "paidAt",
+              'weekly' AS kind,
+              'Aporte semanal' AS label,
+              status
+          `,
+          [existingWeekly.rows[0].id, WEEKLY_CONTRIBUTION_AMOUNT],
+        )
+      } else {
+        const duplicateError = new Error(
+          existingWeekly.rows[0].status === 'approved'
+            ? 'La cuota semanal de esta semana ya fue aprobada.'
+            : 'La cuota semanal de esta semana ya esta pendiente de aprobacion.',
+        )
+        duplicateError.name = 'DUPLICATE_WEEKLY_PAYMENT'
+        throw duplicateError
+      }
+
       createdPayments.push(mapContributionRow(weeklyResult.rows[0]))
-      totalAmount += WEEKLY_CONTRIBUTION_AMOUNT
-      weeklyAmount += WEEKLY_CONTRIBUTION_AMOUNT
-      weeklyCount += 1
     }
 
     if (hasExtraContribution) {
@@ -569,16 +694,16 @@ export async function recordContributionBundle(
         UPDATE account_totals
         SET
           total_contributed = total_contributed + $2,
-          weekly_total = weekly_total + $3,
-          extra_total = extra_total + $4,
-          payment_count = payment_count + $5,
-          weekly_payment_count = weekly_payment_count + $6,
-          extra_payment_count = extra_payment_count + $7,
+          weekly_total = weekly_total + 0,
+          extra_total = extra_total + $3,
+          payment_count = payment_count + $4,
+          weekly_payment_count = weekly_payment_count + 0,
+          extra_payment_count = extra_payment_count + $5,
           last_payment_at = NOW(),
           updated_at = NOW()
         WHERE user_id = $1
       `,
-      [userId, totalAmount, weeklyAmount, extraAmount, createdPayments.length, weeklyCount, extraCount],
+      [userId, totalAmount, extraAmount, extraCount, extraCount],
     )
 
     await client.query(
@@ -591,7 +716,7 @@ export async function recordContributionBundle(
           updated_at = NOW()
         WHERE user_id = $1
       `,
-      [userId, totalAmount, createdPayments.length],
+      [userId, extraAmount, extraCount],
     )
 
     await client.query('COMMIT')
@@ -610,6 +735,123 @@ export async function recordContributionBundle(
       throw duplicateError
     }
 
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function listPendingWeeklyContributions() {
+  const pool = getPool()
+  const result = await pool.query(
+    `
+      SELECT
+        wc.id,
+        wc.user_id AS "userId",
+        CONCAT(users.first_name, ' ', users.last_name) AS "userName",
+        users.state_id AS "stateId",
+        wc.amount::float8 AS amount,
+        wc.week_key AS "weekKey",
+        wc.status,
+        wc.paid_at AS "paidAt"
+      FROM weekly_contributions wc
+      INNER JOIN access_users users ON users.id = wc.user_id
+      WHERE wc.status = 'pending'
+      ORDER BY wc.paid_at ASC
+    `,
+  )
+
+  return result.rows.map(mapPendingWeeklyContribution)
+}
+
+export async function reviewWeeklyContribution({ contributionId, adminUserId, action }) {
+  const pool = getPool()
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+    await ensureAccountTotals(client, adminUserId)
+
+    const contributionResult = await client.query(
+      `
+        SELECT
+          id,
+          user_id AS "userId",
+          amount::float8 AS amount,
+          status
+        FROM weekly_contributions
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [contributionId],
+    )
+
+    const contribution = contributionResult.rows[0]
+
+    if (!contribution) {
+      throw new Error('No encontramos esa cuota semanal.')
+    }
+
+    if (contribution.status !== 'pending') {
+      throw new Error('Esta cuota semanal ya fue revisada.')
+    }
+
+    const nextStatus = action === 'approve' ? 'approved' : 'denied'
+
+    await client.query(
+      `
+        UPDATE weekly_contributions
+        SET
+          status = $2,
+          reviewed_at = NOW(),
+          reviewed_by = $3
+        WHERE id = $1
+      `,
+      [contributionId, nextStatus, adminUserId],
+    )
+
+    if (action === 'approve') {
+      await ensureUserAccount(client, contribution.userId)
+      await ensureAccountTotals(client, contribution.userId)
+
+      await client.query(
+        `
+          UPDATE account_totals
+          SET
+            total_contributed = total_contributed + $2,
+            weekly_total = weekly_total + $2,
+            payment_count = payment_count + 1,
+            weekly_payment_count = weekly_payment_count + 1,
+            last_payment_at = NOW(),
+            updated_at = NOW()
+          WHERE user_id = $1
+        `,
+        [contribution.userId, contribution.amount],
+      )
+
+      await client.query(
+        `
+          UPDATE user_accounts
+          SET
+            total_contributed = total_contributed + $2,
+            payment_count = payment_count + 1,
+            last_payment_at = NOW(),
+            updated_at = NOW()
+          WHERE user_id = $1
+        `,
+        [contribution.userId, contribution.amount],
+      )
+    }
+
+    await client.query('COMMIT')
+
+    return {
+      account: await getAccountSummary(contribution.userId),
+      pendingContributions: await listPendingWeeklyContributions(),
+      action: nextStatus,
+    }
+  } catch (error) {
+    await client.query('ROLLBACK')
     throw error
   } finally {
     client.release()

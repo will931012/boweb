@@ -8,9 +8,12 @@ import {
   findUserByStateId,
   getAccountSummary,
   initDatabase,
+  listPendingWeeklyContributions,
+  listMemberTotals,
   listRecentContributions,
   listUsers,
   recordContributionBundle,
+  reviewWeeklyContribution,
   WEEKLY_CONTRIBUTION_AMOUNT,
   updateLastLogin,
 } from './db.js'
@@ -61,6 +64,13 @@ const serializeAccount = (account) => ({
   weeklyContributionAmount: account.weeklyContributionAmount,
   currentWeekPaid: account.currentWeekPaid,
   currentWeekKey: account.currentWeekKey,
+})
+
+const serializeMemberTotal = (member) => ({
+  id: member.id,
+  userName: member.fullName,
+  stateId: member.stateId,
+  totalAported: member.totalAported,
 })
 
 const normalizeUserId = (value) => {
@@ -198,6 +208,104 @@ app.get('/api/access/account/:userId', async (request, response) => {
   }
 })
 
+app.get('/api/admin/member-totals/:userId', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const userId = normalizeUserId(request.params.userId)
+
+  if (!userId) {
+    response.status(400).json({
+      ok: false,
+      message: 'User ID invalido.',
+    })
+    return
+  }
+
+  try {
+    const user = await findUserById(userId)
+
+    if (!user) {
+      response.status(404).json({
+        ok: false,
+        message: 'No encontramos ese usuario.',
+      })
+      return
+    }
+
+    if (user.role !== 'admin') {
+      response.status(403).json({
+        ok: false,
+        message: 'Solo el rol admin puede ver esta tabla.',
+      })
+      return
+    }
+
+    const members = await listMemberTotals()
+
+    response.json({
+      ok: true,
+      message: 'Tabla administrativa cargada.',
+      members: members.map(serializeMemberTotal),
+    })
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudo cargar la tabla administrativa.',
+    })
+  }
+})
+
+app.get('/api/admin/weekly-approvals/:userId', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const userId = normalizeUserId(request.params.userId)
+
+  if (!userId) {
+    response.status(400).json({
+      ok: false,
+      message: 'User ID invalido.',
+    })
+    return
+  }
+
+  try {
+    const user = await findUserById(userId)
+
+    if (!user) {
+      response.status(404).json({
+        ok: false,
+        message: 'No encontramos ese usuario.',
+      })
+      return
+    }
+
+    if (user.role !== 'admin') {
+      response.status(403).json({
+        ok: false,
+        message: 'Solo el rol admin puede revisar cuotas semanales.',
+      })
+      return
+    }
+
+    const contributions = await listPendingWeeklyContributions()
+
+    response.json({
+      ok: true,
+      message: 'Cola de cuotas pendientes cargada.',
+      contributions,
+    })
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudo cargar la cola de aprobaciones.',
+    })
+  }
+})
+
 app.post('/api/access/login', async (request, response) => {
   if (!ensureDatabaseReady(response)) {
     return
@@ -316,7 +424,7 @@ app.post('/api/access/weekly-payment', async (request, response) => {
     const messageParts = []
 
     if (includeWeeklyContribution) {
-      messageParts.push(`aporte semanal de $${WEEKLY_CONTRIBUTION_AMOUNT}`)
+      messageParts.push(`solicitud de aporte semanal de $${WEEKLY_CONTRIBUTION_AMOUNT}`)
     }
 
     if (Number.isFinite(extraContributionAmount) && extraContributionAmount > 0) {
@@ -363,6 +471,57 @@ app.post('/api/access/weekly-payment', async (request, response) => {
     response.status(500).json({
       ok: false,
       message: error instanceof Error ? error.message : 'No se pudo registrar la cuota semanal.',
+    })
+  }
+})
+
+app.post('/api/admin/weekly-approvals/:contributionId', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const contributionId = normalizeUserId(request.params.contributionId)
+  const adminUserId = normalizeUserId(request.body?.adminUserId)
+  const action = request.body?.action === 'deny' ? 'deny' : request.body?.action === 'approve' ? 'approve' : null
+
+  if (!contributionId || !adminUserId || !action) {
+    response.status(400).json({
+      ok: false,
+      message: 'Datos de revision invalidos.',
+    })
+    return
+  }
+
+  try {
+    const adminUser = await findUserById(adminUserId)
+
+    if (!adminUser || adminUser.role !== 'admin') {
+      response.status(403).json({
+        ok: false,
+        message: 'Solo el rol admin puede aceptar o denegar cuotas.',
+      })
+      return
+    }
+
+    const result = await reviewWeeklyContribution({
+      contributionId,
+      adminUserId,
+      action,
+    })
+
+    response.json({
+      ok: true,
+      message:
+        action === 'approve'
+          ? 'Cuota semanal aprobada correctamente.'
+          : 'Cuota semanal denegada correctamente.',
+      account: result.account ? serializeAccount(result.account) : null,
+      contributions: result.pendingContributions,
+    })
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudo revisar la cuota semanal.',
     })
   }
 })

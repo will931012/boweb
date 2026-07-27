@@ -52,6 +52,7 @@ type AccountSummary = {
   lastPaymentAt: string | null
   weeklyContributionAmount: number
   currentWeekPaid: boolean
+  currentWeekStatus: 'none' | 'pending' | 'approved' | 'denied'
   currentWeekKey: string
 }
 
@@ -62,6 +63,24 @@ type ContributionPayment = {
   paidAt: string
   kind: 'weekly' | 'extra'
   label: string
+}
+
+type AdminMemberTotal = {
+  id: number
+  userName: string
+  stateId: string
+  totalAported: number
+}
+
+type AdminPendingContribution = {
+  id: number
+  userId: number
+  userName: string
+  stateId: string
+  amount: number
+  weekKey: string
+  status: 'pending' | 'approved' | 'denied'
+  paidAt: string
 }
 
 type BootstrapResponse = {
@@ -84,6 +103,19 @@ type AccountResponse = {
   account?: AccountSummary | null
   recentPayments?: ContributionPayment[]
   payments?: ContributionPayment[]
+}
+
+type AdminTotalsResponse = {
+  ok: boolean
+  message: string
+  members?: AdminMemberTotal[]
+}
+
+type AdminApprovalsResponse = {
+  ok: boolean
+  message: string
+  contributions?: AdminPendingContribution[]
+  account?: AccountSummary | null
 }
 
 const panelMotion = {
@@ -156,10 +188,15 @@ function App() {
   const [currentUser, setCurrentUser] = useState<AccessUser | null>(null)
   const [account, setAccount] = useState<AccountSummary | null>(null)
   const [recentPayments, setRecentPayments] = useState<ContributionPayment[]>([])
+  const [adminMembers, setAdminMembers] = useState<AdminMemberTotal[]>([])
+  const [pendingWeeklyApprovals, setPendingWeeklyApprovals] = useState<AdminPendingContribution[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingAccount, setIsLoadingAccount] = useState(false)
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false)
+  const [isLoadingAdminTable, setIsLoadingAdminTable] = useState(false)
+  const [isLoadingAdminApprovals, setIsLoadingAdminApprovals] = useState(false)
+  const [reviewingContributionId, setReviewingContributionId] = useState<number | null>(null)
   const [isContributionModalOpen, setIsContributionModalOpen] = useState(false)
   const [includeWeeklyContribution, setIncludeWeeklyContribution] = useState(false)
   const [includeExtraContribution, setIncludeExtraContribution] = useState(false)
@@ -172,6 +209,10 @@ function App() {
       if (storedUser) {
         setCurrentUser(storedUser)
         void loadAccount(storedUser.id)
+        if (storedUser.role === 'admin') {
+          void loadAdminMembers(storedUser.id)
+          void loadPendingWeeklyApprovals(storedUser.id)
+        }
       }
 
       try {
@@ -220,6 +261,50 @@ function App() {
       setAccountMessage('')
     } finally {
       setIsLoadingAccount(false)
+    }
+  }
+
+  const loadAdminMembers = async (userId: number) => {
+    setIsLoadingAdminTable(true)
+
+    try {
+      const response = await fetch(`/api/admin/member-totals/${userId}`)
+      const data = (await response.json()) as AdminTotalsResponse
+
+      if (!response.ok || !data.ok || !data.members) {
+        throw new Error(data.message ?? 'No se pudo cargar la tabla administrativa.')
+      }
+
+      setAdminMembers(data.members)
+    } catch (error) {
+      setAccountError(
+        error instanceof Error ? error.message : 'No se pudo cargar la tabla administrativa.',
+      )
+      setAdminMembers([])
+    } finally {
+      setIsLoadingAdminTable(false)
+    }
+  }
+
+  const loadPendingWeeklyApprovals = async (userId: number) => {
+    setIsLoadingAdminApprovals(true)
+
+    try {
+      const response = await fetch(`/api/admin/weekly-approvals/${userId}`)
+      const data = (await response.json()) as AdminApprovalsResponse
+
+      if (!response.ok || !data.ok || !data.contributions) {
+        throw new Error(data.message ?? 'No se pudo cargar la cola de cuotas pendientes.')
+      }
+
+      setPendingWeeklyApprovals(data.contributions)
+    } catch (error) {
+      setAccountError(
+        error instanceof Error ? error.message : 'No se pudo cargar la cola de cuotas pendientes.',
+      )
+      setPendingWeeklyApprovals([])
+    } finally {
+      setIsLoadingAdminApprovals(false)
     }
   }
 
@@ -308,6 +393,13 @@ function App() {
       }
 
       await loadAccount(data.user.id)
+      if (data.user.role === 'admin') {
+        await loadAdminMembers(data.user.id)
+        await loadPendingWeeklyApprovals(data.user.id)
+      } else {
+        setAdminMembers([])
+        setPendingWeeklyApprovals([])
+      }
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Error inesperado al procesar el acceso.',
@@ -351,6 +443,10 @@ function App() {
       setIncludeWeeklyContribution(false)
       setIncludeExtraContribution(false)
       setExtraContributionAmount('')
+      if (currentUser.role === 'admin') {
+        await loadAdminMembers(currentUser.id)
+        await loadPendingWeeklyApprovals(currentUser.id)
+      }
     } catch (error) {
       setAccountError(
         error instanceof Error ? error.message : 'No se pudo registrar el dinero semanal.',
@@ -365,6 +461,8 @@ function App() {
     setCurrentUser(null)
     setAccount(null)
     setRecentPayments([])
+    setAdminMembers([])
+    setPendingWeeklyApprovals([])
     setAccountMessage('')
     setAccountError('')
     setFirstName('')
@@ -539,6 +637,36 @@ function App() {
                     </div>
                   </Card>
                 </Grid>
+
+                {currentUser.role === 'admin' ? (
+                  <>
+                    <Separator size="4" />
+                    <Card className="mini-info-card recent-payments-card">
+                      <strong>Tabla administrativa</strong>
+                      <div className="admin-table">
+                        <div className="admin-table-row admin-table-head">
+                          <span>User name</span>
+                          <span>State ID</span>
+                          <span>Total aported</span>
+                        </div>
+
+                        {isLoadingAdminTable ? (
+                          <p>Cargando tabla administrativa...</p>
+                        ) : adminMembers.length ? (
+                          adminMembers.map((member) => (
+                            <div key={member.id} className="admin-table-row">
+                              <span>{member.userName}</span>
+                              <span>{member.stateId}</span>
+                              <strong>{currencyFormatter.format(member.totalAported)}</strong>
+                            </div>
+                          ))
+                        ) : (
+                          <p>No hay miembros para mostrar todavia.</p>
+                        )}
+                      </div>
+                    </Card>
+                  </>
+                ) : null}
               </Flex>
             </Card>
 

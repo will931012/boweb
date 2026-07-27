@@ -340,6 +340,36 @@ img {
   color: #f3f4f7;
 }
 
+.admin-table {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.admin-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(120px, 0.8fr) minmax(140px, 0.8fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.admin-table-head {
+  background: rgba(3, 84, 255, 0.14);
+  color: #eff4ff;
+  font-weight: 700;
+}
+
+.admin-table-row span,
+.admin-table-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .contribution-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -458,5 +488,9 @@ img {
 
   .contribution-modal-actions {
     flex-direction: column-reverse;
+  }
+
+  .admin-table-row {
+    grid-template-columns: 1fr;
   }
 }
