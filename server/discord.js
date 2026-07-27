@@ -15,11 +15,11 @@ function buildContributionLines({ user, account, payments }) {
   const totalAdded = payments.reduce((sum, payment) => sum + payment.amount, 0)
 
   return [
-    `Miembro: ${user.fullName} (${user.stateId})`,
-    `Aporte semanal: ${weeklyPayment ? formatCurrency(weeklyPayment.amount) : 'No entregado'}`,
-    `Dinero extra: ${extraPayments.length ? formatCurrency(extraTotal) : 'No entregado'}`,
-    `Total registrado: ${formatCurrency(totalAdded)}`,
-    `Estado de cuenta total: ${formatCurrency(account.totalContributed)}`,
+    `👤 Miembro: ${user.fullName} (${user.stateId})`,
+    `📅 Aporte semanal: ${weeklyPayment ? formatCurrency(weeklyPayment.amount) : 'No entregado'}`,
+    `💵 Dinero extra: ${extraPayments.length ? formatCurrency(extraTotal) : 'No entregado'}`,
+    `🧾 Total registrado: ${formatCurrency(totalAdded)}`,
+    `🏦 Estado de cuenta total: ${formatCurrency(account.totalContributed)}`,
   ]
 }
 
@@ -37,7 +37,7 @@ export async function notifyDiscordContribution({ user, account, payments }) {
     },
     body: JSON.stringify({
       content: [
-        'Nuevo movimiento registrado en Black Oaths',
+        '🔥 Nuevo movimiento registrado en Black Oaths',
         ...lines,
       ].join('\n'),
       allowed_mentions: {
