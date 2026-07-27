@@ -8,7 +8,7 @@ import {
   initDatabase,
   listRecentContributions,
   listUsers,
-  recordWeeklyContribution,
+  recordContributionBundle,
   WEEKLY_CONTRIBUTION_AMOUNT,
   updateLastLogin,
 } from './db.js'
@@ -295,6 +295,8 @@ app.post('/api/access/weekly-payment', async (request, response) => {
   }
 
   const userId = normalizeUserId(request.body?.userId)
+  const includeWeeklyContribution = Boolean(request.body?.includeWeeklyContribution)
+  const extraContributionAmount = Number.parseFloat(String(request.body?.extraContributionAmount ?? 0))
 
   if (!userId) {
     response.status(400).json({
@@ -305,13 +307,26 @@ app.post('/api/access/weekly-payment', async (request, response) => {
   }
 
   try {
-    const result = await recordWeeklyContribution(userId, WEEKLY_CONTRIBUTION_AMOUNT)
+    const result = await recordContributionBundle(userId, {
+      includeWeeklyContribution,
+      extraContributionAmount,
+    })
+
+    const messageParts = []
+
+    if (includeWeeklyContribution) {
+      messageParts.push(`aporte semanal de $${WEEKLY_CONTRIBUTION_AMOUNT}`)
+    }
+
+    if (Number.isFinite(extraContributionAmount) && extraContributionAmount > 0) {
+      messageParts.push(`dinero extra de $${extraContributionAmount}`)
+    }
 
     response.status(201).json({
       ok: true,
-      message: `Se registraron $${WEEKLY_CONTRIBUTION_AMOUNT} para la semana actual.`,
+      message: `Se registro ${messageParts.join(' y ')}.`,
       account: result.account ? serializeAccount(result.account) : null,
-      payment: result.payment,
+      payments: result.payments,
       recentPayments: result.recentPayments,
     })
   } catch (error) {

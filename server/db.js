@@ -3,7 +3,7 @@ import pg from 'pg'
 const { Pool } = pg
 
 let pool = null
-export const WEEKLY_CONTRIBUTION_AMOUNT = 25
+export const WEEKLY_CONTRIBUTION_AMOUNT = 1500
 
 function toCurrencyNumber(value) {
   return Number.parseFloat(value ?? 0)
@@ -105,6 +105,17 @@ function mapAccountSummary(row) {
   }
 }
 
+function mapContributionRow(row) {
+  return {
+    id: row.id,
+    amount: toCurrencyNumber(row.amount),
+    weekKey: row.weekKey,
+    paidAt: row.paidAt,
+    kind: row.kind,
+    label: row.label,
+  }
+}
+
 export async function initDatabase() {
   const pool = getPool()
 
@@ -140,6 +151,17 @@ export async function initDatabase() {
       paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (user_id, week_key)
+    )
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS extra_contributions (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES access_users(id) ON DELETE CASCADE,
+      amount NUMERIC(12, 2) NOT NULL,
+      note TEXT NULL,
+      paid_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
 
@@ -322,71 +344,124 @@ export async function listRecentContributions(userId, limit = 6) {
   const pool = getPool()
   const result = await pool.query(
     `
-      SELECT
-        id,
-        amount::float8 AS amount,
-        week_key AS "weekKey",
-        paid_at AS "paidAt"
-      FROM weekly_contributions
-      WHERE user_id = $1
-      ORDER BY paid_at DESC
+      SELECT *
+      FROM (
+        SELECT
+          id,
+          amount::float8 AS amount,
+          week_key AS "weekKey",
+          paid_at AS "paidAt",
+          'weekly' AS kind,
+          'Aporte semanal' AS label
+        FROM weekly_contributions
+        WHERE user_id = $1
+
+        UNION ALL
+
+        SELECT
+          id,
+          amount::float8 AS amount,
+          'Extra' AS "weekKey",
+          paid_at AS "paidAt",
+          'extra' AS kind,
+          'Dinero extra' AS label
+        FROM extra_contributions
+        WHERE user_id = $1
+      ) contributions
+      ORDER BY "paidAt" DESC
       LIMIT $2
     `,
     [userId, limit],
   )
 
-  return result.rows.map((row) => ({
-    id: row.id,
-    amount: toCurrencyNumber(row.amount),
-    weekKey: row.weekKey,
-    paidAt: row.paidAt,
-  }))
+  return result.rows.map(mapContributionRow)
 }
 
 export async function recordWeeklyContribution(userId, amount = WEEKLY_CONTRIBUTION_AMOUNT) {
+  return recordContributionBundle(userId, {
+    includeWeeklyContribution: true,
+    extraContributionAmount: 0,
+  })
+}
+
+export async function recordContributionBundle(
+  userId,
+  { includeWeeklyContribution = false, extraContributionAmount = 0 },
+) {
   const pool = getPool()
   const client = await pool.connect()
   const weekKey = buildWeekKey()
+  const normalizedExtraAmount = Number.parseFloat(String(extraContributionAmount || 0))
+  const hasExtraContribution = Number.isFinite(normalizedExtraAmount) && normalizedExtraAmount > 0
+
+  if (!includeWeeklyContribution && !hasExtraContribution) {
+    throw new Error('Selecciona un aporte semanal o ingresa dinero extra.')
+  }
 
   try {
     await client.query('BEGIN')
     await ensureUserAccount(client, userId)
 
-    const insertResult = await client.query(
-      `
-        INSERT INTO weekly_contributions (user_id, amount, week_key)
-        VALUES ($1, $2, $3)
-        RETURNING
-          id,
-          amount::float8 AS amount,
-          week_key AS "weekKey",
-          paid_at AS "paidAt"
-      `,
-      [userId, amount, weekKey],
-    )
+    const createdPayments = []
+    let totalAmount = 0
+
+    if (includeWeeklyContribution) {
+      const weeklyResult = await client.query(
+        `
+          INSERT INTO weekly_contributions (user_id, amount, week_key)
+          VALUES ($1, $2, $3)
+          RETURNING
+            id,
+            amount::float8 AS amount,
+            week_key AS "weekKey",
+            paid_at AS "paidAt",
+            'weekly' AS kind,
+            'Aporte semanal' AS label
+        `,
+        [userId, WEEKLY_CONTRIBUTION_AMOUNT, weekKey],
+      )
+
+      createdPayments.push(mapContributionRow(weeklyResult.rows[0]))
+      totalAmount += WEEKLY_CONTRIBUTION_AMOUNT
+    }
+
+    if (hasExtraContribution) {
+      const extraResult = await client.query(
+        `
+          INSERT INTO extra_contributions (user_id, amount)
+          VALUES ($1, $2)
+          RETURNING
+            id,
+            amount::float8 AS amount,
+            'Extra' AS "weekKey",
+            paid_at AS "paidAt",
+            'extra' AS kind,
+            'Dinero extra' AS label
+        `,
+        [userId, normalizedExtraAmount],
+      )
+
+      createdPayments.push(mapContributionRow(extraResult.rows[0]))
+      totalAmount += normalizedExtraAmount
+    }
 
     await client.query(
       `
         UPDATE user_accounts
         SET
           total_contributed = total_contributed + $2,
-          payment_count = payment_count + 1,
+          payment_count = payment_count + $3,
           last_payment_at = NOW(),
           updated_at = NOW()
         WHERE user_id = $1
       `,
-      [userId, amount],
+      [userId, totalAmount, createdPayments.length],
     )
 
     await client.query('COMMIT')
 
     return {
-      payment: {
-        id: insertResult.rows[0].id,
-        amount: toCurrencyNumber(insertResult.rows[0].amount),
-        weekKey: insertResult.rows[0].weekKey,
-        paidAt: insertResult.rows[0].paidAt,
-      },
+      payments: createdPayments,
       account: await getAccountSummary(userId),
       recentPayments: await listRecentContributions(userId),
     }

@@ -1,7 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   Badge,
-  Box,
   Button,
   Card,
   Flex,
@@ -61,6 +60,8 @@ type ContributionPayment = {
   amount: number
   weekKey: string
   paidAt: string
+  kind: 'weekly' | 'extra'
+  label: string
 }
 
 type BootstrapResponse = {
@@ -82,7 +83,7 @@ type AccountResponse = {
   message: string
   account?: AccountSummary | null
   recentPayments?: ContributionPayment[]
-  payment?: ContributionPayment
+  payments?: ContributionPayment[]
 }
 
 const panelMotion = {
@@ -126,6 +127,10 @@ function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [isLoadingAccount, setIsLoadingAccount] = useState(false)
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false)
+  const [isContributionModalOpen, setIsContributionModalOpen] = useState(false)
+  const [includeWeeklyContribution, setIncludeWeeklyContribution] = useState(false)
+  const [includeExtraContribution, setIncludeExtraContribution] = useState(false)
+  const [extraContributionAmount, setExtraContributionAmount] = useState('')
 
   useEffect(() => {
     const loadBootstrap = async () => {
@@ -196,14 +201,14 @@ function App() {
 
   const weeklyButtonLabel = useMemo(() => {
     if (!account) {
-      return 'Dar dinero semanal'
+      return 'Aporte semanal'
     }
 
     if (account.currentWeekPaid) {
-      return `Semana ${account.currentWeekKey} ya registrada`
+      return `La semana ${account.currentWeekKey} ya fue cubierta`
     }
 
-    return `Dar dinero semanal (${currencyFormatter.format(account.weeklyContributionAmount)})`
+    return `Aporte semanal ${currencyFormatter.format(account.weeklyContributionAmount)}`
   }, [account])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -272,7 +277,7 @@ function App() {
   }
 
   const handleWeeklyPayment = async () => {
-    if (!currentUser || !account || account.currentWeekPaid) {
+    if (!currentUser || !account) {
       return
     }
 
@@ -285,7 +290,11 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ userId: currentUser.id }),
+        body: JSON.stringify({
+          userId: currentUser.id,
+          includeWeeklyContribution,
+          extraContributionAmount: includeExtraContribution ? extraContributionAmount : 0,
+        }),
       })
 
       const data = (await response.json()) as AccountResponse
@@ -297,6 +306,10 @@ function App() {
       setAccount(data.account)
       setRecentPayments(data.recentPayments ?? [])
       setAccountMessage(data.message)
+      setIsContributionModalOpen(false)
+      setIncludeWeeklyContribution(false)
+      setIncludeExtraContribution(false)
+      setExtraContributionAmount('')
     } catch (error) {
       setAccountError(
         error instanceof Error ? error.message : 'No se pudo registrar el dinero semanal.',
@@ -315,6 +328,23 @@ function App() {
     setFirstName('')
     setLastName('')
     setStateId('')
+  }
+
+  const openContributionModal = () => {
+    setIncludeWeeklyContribution(account ? !account.currentWeekPaid : true)
+    setIncludeExtraContribution(false)
+    setExtraContributionAmount('')
+    setAccountError('')
+    setAccountMessage('')
+    setIsContributionModalOpen(true)
+  }
+
+  const closeContributionModal = () => {
+    if (isRegisteringPayment) {
+      return
+    }
+
+    setIsContributionModalOpen(false)
   }
 
   if (currentUser) {
@@ -358,8 +388,8 @@ function App() {
                     Estado total y aporte de la semana.
                   </Heading>
                   <Text as="p" size="3" className="access-copy">
-                    Esta vista registra la cuota semanal una sola vez por semana y mantiene el
-                    estado total de la cuenta del miembro.
+                    Abre el popup para marcar aporte semanal entregado y agregar dinero extra si
+                    hace falta. El boton sigue disponible aunque la semana ya este cubierta.
                   </Text>
                 </div>
 
@@ -384,7 +414,7 @@ function App() {
                       <Banknote size={18} />
                     </span>
                     <strong>{account?.paymentCount ?? 0}</strong>
-                    <p>pagos semanales registrados hasta hoy.</p>
+                    <p>pagos y extras registrados hasta hoy.</p>
                   </Card>
 
                   <Card className="mini-info-card account-stat-card">
@@ -394,8 +424,8 @@ function App() {
                     <strong>{account?.currentWeekKey ?? 'Sin semana'}</strong>
                     <p>
                       {account?.currentWeekPaid
-                        ? 'la semana actual ya tiene cuota registrada.'
-                        : 'la semana actual todavia no tiene cuota.'}
+                        ? 'la semana actual ya tiene aporte semanal.'
+                        : 'la semana actual todavia no tiene aporte semanal.'}
                     </p>
                   </Card>
                 </Grid>
@@ -404,10 +434,10 @@ function App() {
                   <Button
                     size="4"
                     className="weekly-pay-button"
-                    disabled={isLoadingAccount || isRegisteringPayment || account?.currentWeekPaid}
-                    onClick={handleWeeklyPayment}
+                    disabled={isLoadingAccount || isRegisteringPayment}
+                    onClick={openContributionModal}
                   >
-                    {isRegisteringPayment ? 'Registrando...' : weeklyButtonLabel}
+                    {isRegisteringPayment ? 'Registrando...' : 'Dar dinero'}
                   </Button>
 
                   <Card className="mini-info-card account-aside-card">
@@ -415,7 +445,7 @@ function App() {
                     <p>
                       {account
                         ? currencyFormatter.format(account.weeklyContributionAmount)
-                        : currencyFormatter.format(25)}
+                        : currencyFormatter.format(1500)}
                     </p>
                   </Card>
                 </Flex>
@@ -428,9 +458,11 @@ function App() {
                     <div className="payment-list">
                       {recentPayments.length ? (
                         recentPayments.map((payment) => (
-                          <div key={payment.id} className="payment-row">
+                          <div key={`${payment.kind}-${payment.id}`} className="payment-row">
                             <div>
-                              <span>{payment.weekKey}</span>
+                              <span>
+                                {payment.label} · {payment.weekKey}
+                              </span>
                               <small>{dateFormatter.format(new Date(payment.paidAt))}</small>
                             </div>
                             <strong>{currencyFormatter.format(payment.amount)}</strong>
@@ -479,13 +511,83 @@ function App() {
                   Caja semanal.
                 </Heading>
                 <Text as="p" size="3" className="overlay-body">
-                  El sistema crea una cuenta por miembro, guarda historial de cuotas semanales y
-                  bloquea duplicados durante la misma semana.
+                  El popup guarda el aporte semanal, el dinero extra, o ambos, y los agrega al
+                  estado total del miembro.
                 </Text>
               </div>
             </Card>
           </motion.section>
         </Section>
+
+        {isContributionModalOpen ? (
+          <div className="contribution-modal-backdrop" onClick={closeContributionModal}>
+            <div className="contribution-modal" onClick={(event) => event.stopPropagation()}>
+              <Badge size="3" radius="full" className="hero-kicker">
+                Registrar aporte
+              </Badge>
+              <Heading size="6" className="contribution-modal-title">
+                Confirma el dinero entregado
+              </Heading>
+              <Text as="p" size="2" className="access-copy">
+                Marca el aporte semanal entregado y activa dinero extra entregado si necesitas
+                sumar una cantidad adicional.
+              </Text>
+
+              <label className="contribution-check">
+                <input
+                  type="checkbox"
+                  checked={includeWeeklyContribution}
+                  disabled={account?.currentWeekPaid}
+                  onChange={(event) => setIncludeWeeklyContribution(event.target.checked)}
+                />
+                <span>
+                  Aporte semanal entregado
+                  <small>
+                    {account?.currentWeekPaid
+                      ? `La semana ${account.currentWeekKey} ya fue registrada.`
+                      : weeklyButtonLabel}
+                  </small>
+                </span>
+              </label>
+
+              <label className="contribution-check">
+                <input
+                  type="checkbox"
+                  checked={includeExtraContribution}
+                  onChange={(event) => setIncludeExtraContribution(event.target.checked)}
+                />
+                <span>
+                  Dinero extra entregado
+                  <small>Puedes sumar cualquier monto adicional al estado total.</small>
+                </span>
+              </label>
+
+              {includeExtraContribution ? (
+                <label className="contribution-amount">
+                  <span>Monto extra</span>
+                  <TextField.Root
+                    size="3"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={extraContributionAmount}
+                    onChange={(event) => setExtraContributionAmount(event.target.value)}
+                    placeholder="50.00"
+                  />
+                </label>
+              ) : null}
+
+              <div className="contribution-modal-actions">
+                <Button variant="soft" color="gray" size="3" onClick={closeContributionModal}>
+                  Cancelar
+                </Button>
+                <Button size="3" disabled={isRegisteringPayment} onClick={handleWeeklyPayment}>
+                  {isRegisteringPayment ? 'Guardando...' : 'Guardar aporte'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
     )
   }
