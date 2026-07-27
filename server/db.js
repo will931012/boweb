@@ -93,6 +93,26 @@ async function ensureUserAccount(client, userId) {
   )
 }
 
+async function ensureAccountTotals(client, userId) {
+  await client.query(
+    `
+      INSERT INTO account_totals (
+        user_id,
+        total_contributed,
+        weekly_total,
+        extra_total,
+        payment_count,
+        weekly_payment_count,
+        extra_payment_count,
+        last_payment_at
+      )
+      VALUES ($1, 0, 0, 0, 0, 0, 0, NULL)
+      ON CONFLICT (user_id) DO NOTHING
+    `,
+    [userId],
+  )
+}
+
 function mapAccountSummary(row) {
   return {
     userId: row.userId,
@@ -143,6 +163,21 @@ export async function initDatabase() {
   `)
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS account_totals (
+      user_id BIGINT PRIMARY KEY REFERENCES access_users(id) ON DELETE CASCADE,
+      total_contributed NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      weekly_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      extra_total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      payment_count INT NOT NULL DEFAULT 0,
+      weekly_payment_count INT NOT NULL DEFAULT 0,
+      extra_payment_count INT NOT NULL DEFAULT 0,
+      last_payment_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS weekly_contributions (
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES access_users(id) ON DELETE CASCADE,
@@ -174,6 +209,49 @@ export async function initDatabase() {
       FROM access_users
       ON CONFLICT (user_id) DO NOTHING
     `)
+    await pool.query(`
+      INSERT INTO account_totals (user_id)
+      SELECT id
+      FROM access_users
+      ON CONFLICT (user_id) DO NOTHING
+    `)
+    await pool.query(`
+      UPDATE account_totals totals
+      SET
+        weekly_total = COALESCE(weekly_data.weekly_total, 0),
+        extra_total = COALESCE(extra_data.extra_total, 0),
+        total_contributed = COALESCE(weekly_data.weekly_total, 0) + COALESCE(extra_data.extra_total, 0),
+        weekly_payment_count = COALESCE(weekly_data.weekly_payment_count, 0),
+        extra_payment_count = COALESCE(extra_data.extra_payment_count, 0),
+        payment_count = COALESCE(weekly_data.weekly_payment_count, 0) + COALESCE(extra_data.extra_payment_count, 0),
+        last_payment_at = CASE
+          WHEN weekly_data.last_payment_at IS NULL AND extra_data.last_payment_at IS NULL THEN NULL
+          ELSE GREATEST(
+            COALESCE(weekly_data.last_payment_at, to_timestamp(0)),
+            COALESCE(extra_data.last_payment_at, to_timestamp(0))
+          )
+        END,
+        updated_at = NOW()
+      FROM (
+        SELECT
+          user_id,
+          SUM(amount) AS weekly_total,
+          COUNT(*)::int AS weekly_payment_count,
+          MAX(paid_at) AS last_payment_at
+        FROM weekly_contributions
+        GROUP BY user_id
+      ) weekly_data
+      FULL OUTER JOIN (
+        SELECT
+          user_id,
+          SUM(amount) AS extra_total,
+          COUNT(*)::int AS extra_payment_count,
+          MAX(paid_at) AS last_payment_at
+        FROM extra_contributions
+        GROUP BY user_id
+      ) extra_data ON extra_data.user_id = weekly_data.user_id
+      WHERE totals.user_id = COALESCE(weekly_data.user_id, extra_data.user_id)
+    `)
     return
   }
 
@@ -190,6 +268,15 @@ export async function initDatabase() {
     await pool.query(
       `
         INSERT INTO user_accounts (user_id)
+        VALUES ($1)
+        ON CONFLICT (user_id) DO NOTHING
+      `,
+      [result.rows[0].id],
+    )
+
+    await pool.query(
+      `
+        INSERT INTO account_totals (user_id)
         VALUES ($1)
         ON CONFLICT (user_id) DO NOTHING
       `,
@@ -301,6 +388,7 @@ export async function createUser({ firstName, lastName, stateId, role = 'miembro
   )
 
   await ensureUserAccount(pool, result.rows[0].id)
+  await ensureAccountTotals(pool, result.rows[0].id)
 
   return result.rows[0]
 }
@@ -330,25 +418,26 @@ export async function updateLastLogin(userId) {
 export async function getAccountSummary(userId) {
   const pool = getPool()
   await ensureUserAccount(pool, userId)
+  await ensureAccountTotals(pool, userId)
 
   const currentWeekKey = buildWeekKey()
   const result = await pool.query(
     `
       SELECT
-        ua.user_id AS "userId",
-        ua.total_contributed::float8 AS "totalContributed",
-        ua.payment_count AS "paymentCount",
-        ua.last_payment_at AS "lastPaymentAt",
+        totals.user_id AS "userId",
+        totals.total_contributed::float8 AS "totalContributed",
+        totals.payment_count AS "paymentCount",
+        totals.last_payment_at AS "lastPaymentAt",
         $2::float8 AS "weeklyContributionAmount",
         EXISTS (
           SELECT 1
           FROM weekly_contributions wc
-          WHERE wc.user_id = ua.user_id
+          WHERE wc.user_id = totals.user_id
             AND wc.week_key = $3
         ) AS "currentWeekPaid",
         $3 AS "currentWeekKey"
-      FROM user_accounts ua
-      WHERE ua.user_id = $1
+      FROM account_totals totals
+      WHERE totals.user_id = $1
       LIMIT 1
     `,
     [userId, WEEKLY_CONTRIBUTION_AMOUNT, currentWeekKey],
@@ -422,9 +511,14 @@ export async function recordContributionBundle(
   try {
     await client.query('BEGIN')
     await ensureUserAccount(client, userId)
+    await ensureAccountTotals(client, userId)
 
     const createdPayments = []
     let totalAmount = 0
+    let weeklyAmount = 0
+    let extraAmount = 0
+    let weeklyCount = 0
+    let extraCount = 0
 
     if (includeWeeklyContribution) {
       const weeklyResult = await client.query(
@@ -444,6 +538,8 @@ export async function recordContributionBundle(
 
       createdPayments.push(mapContributionRow(weeklyResult.rows[0]))
       totalAmount += WEEKLY_CONTRIBUTION_AMOUNT
+      weeklyAmount += WEEKLY_CONTRIBUTION_AMOUNT
+      weeklyCount += 1
     }
 
     if (hasExtraContribution) {
@@ -464,7 +560,26 @@ export async function recordContributionBundle(
 
       createdPayments.push(mapContributionRow(extraResult.rows[0]))
       totalAmount += normalizedExtraAmount
+      extraAmount += normalizedExtraAmount
+      extraCount += 1
     }
+
+    await client.query(
+      `
+        UPDATE account_totals
+        SET
+          total_contributed = total_contributed + $2,
+          weekly_total = weekly_total + $3,
+          extra_total = extra_total + $4,
+          payment_count = payment_count + $5,
+          weekly_payment_count = weekly_payment_count + $6,
+          extra_payment_count = extra_payment_count + $7,
+          last_payment_at = NOW(),
+          updated_at = NOW()
+        WHERE user_id = $1
+      `,
+      [userId, totalAmount, weeklyAmount, extraAmount, createdPayments.length, weeklyCount, extraCount],
+    )
 
     await client.query(
       `
