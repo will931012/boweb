@@ -3,7 +3,7 @@ import pg from 'pg'
 const { Pool } = pg
 
 let pool = null
-export const WEEKLY_CONTRIBUTION_AMOUNT = 1500
+export const WEEKLY_CONTRIBUTION_AMOUNT = 5000
 
 function toCurrencyNumber(value) {
   return Number.parseFloat(value ?? 0)
@@ -153,6 +153,18 @@ function mapPendingWeeklyContribution(row) {
   }
 }
 
+function mapMissingWeeklyContribution(row) {
+  return {
+    id: row.id,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    fullName: row.fullName.trim(),
+    stateId: row.stateId,
+    role: row.role,
+    weeklyStatus: row.weeklyStatus ?? 'none',
+  }
+}
+
 export async function initDatabase() {
   const pool = getPool()
 
@@ -257,6 +269,17 @@ export async function initDatabase() {
   await pool.query(`
     ALTER TABLE extra_contributions
     ADD COLUMN IF NOT EXISTS reviewed_by BIGINT NULL REFERENCES access_users(id) ON DELETE SET NULL
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS discord_daily_notifications (
+      id BIGSERIAL PRIMARY KEY,
+      notification_type TEXT NOT NULL,
+      notification_date TEXT NOT NULL,
+      week_key TEXT NOT NULL,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (notification_type, notification_date)
+    )
   `)
 
   await pool.query(`
@@ -468,6 +491,50 @@ export async function listMemberTotals() {
     stateId: row.stateId,
     totalAported: toCurrencyNumber(row.totalAported),
   }))
+}
+
+export function getCurrentWeekKey(date = new Date()) {
+  return buildWeekKey(date)
+}
+
+export async function listUsersMissingWeeklyContribution(weekKey = buildWeekKey()) {
+  const pool = getPool()
+  const result = await pool.query(
+    `
+      SELECT
+        users.id,
+        users.first_name AS "firstName",
+        users.last_name AS "lastName",
+        CONCAT(users.first_name, ' ', users.last_name) AS "fullName",
+        users.state_id AS "stateId",
+        users.role,
+        weekly.status AS "weeklyStatus"
+      FROM access_users users
+      LEFT JOIN weekly_contributions weekly
+        ON weekly.user_id = users.id
+       AND weekly.week_key = $1
+      WHERE weekly.id IS NULL OR weekly.status = 'denied'
+      ORDER BY users.first_name ASC, users.last_name ASC, users.id ASC
+    `,
+    [weekKey],
+  )
+
+  return result.rows.map(mapMissingWeeklyContribution)
+}
+
+export async function markDailyDiscordNotificationSent(notificationType, notificationDate, weekKey) {
+  const pool = getPool()
+  const result = await pool.query(
+    `
+      INSERT INTO discord_daily_notifications (notification_type, notification_date, week_key)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (notification_type, notification_date) DO NOTHING
+      RETURNING id
+    `,
+    [notificationType, notificationDate, weekKey],
+  )
+
+  return Boolean(result.rows[0])
 }
 
 export async function createUser({ firstName, lastName, stateId, role = 'miembro' }) {
@@ -900,6 +967,7 @@ export async function reviewContribution({ contributionId, adminUserId, action, 
               kind,
               label: kind === 'weekly' ? 'Aporte semanal' : 'Dinero extra',
               status: 'approved',
+              hasWeeklyContribution: kind === 'weekly',
             }
           : null,
       userId: contribution.userId,

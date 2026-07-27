@@ -682,7 +682,7 @@ function App() {
               <p>
                 {account
                   ? currencyFormatter.format(account.weeklyContributionAmount)
-                  : currencyFormatter.format(1500)}
+                  : currencyFormatter.format(5000)}
               </p>
             </Card>
           </Flex>

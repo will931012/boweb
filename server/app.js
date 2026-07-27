@@ -509,6 +509,7 @@ app.post('/api/admin/contribution-approvals/:kind/:contributionId', async (reque
           user: serializeUser(approvedUser),
           account: result.account,
           payments: [result.approvedPayment],
+          hasWeeklyContribution: result.approvedPayment.hasWeeklyContribution === true,
         }).catch((error) => {
           console.error('No se pudo enviar la notificacion a Discord:', error)
         })
