@@ -4,8 +4,12 @@ import {
   createUser,
   findUserByLogin,
   findUserByStateId,
+  getAccountSummary,
   initDatabase,
+  listRecentContributions,
   listUsers,
+  recordWeeklyContribution,
+  WEEKLY_CONTRIBUTION_AMOUNT,
   updateLastLogin,
 } from './db.js'
 
@@ -46,6 +50,21 @@ const serializeUser = (user) => ({
   createdAt: user.createdAt,
   lastLoginAt: user.lastLoginAt,
 })
+
+const serializeAccount = (account) => ({
+  userId: account.userId,
+  totalContributed: account.totalContributed,
+  paymentCount: account.paymentCount,
+  lastPaymentAt: account.lastPaymentAt,
+  weeklyContributionAmount: account.weeklyContributionAmount,
+  currentWeekPaid: account.currentWeekPaid,
+  currentWeekKey: account.currentWeekKey,
+})
+
+const normalizeUserId = (value) => {
+  const parsed = Number.parseInt(String(value), 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
 
 const ensureDatabaseReady = (response) => {
   if (!databaseStartupError) {
@@ -131,6 +150,48 @@ app.get('/api/access/bootstrap', async (_request, response) => {
     response.status(500).json({
       ok: false,
       message: error instanceof Error ? error.message : 'No se pudo cargar el bootstrap.',
+    })
+  }
+})
+
+app.get('/api/access/account/:userId', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const userId = normalizeUserId(request.params.userId)
+
+  if (!userId) {
+    response.status(400).json({
+      ok: false,
+      message: 'User ID invalido.',
+    })
+    return
+  }
+
+  try {
+    const account = await getAccountSummary(userId)
+
+    if (!account) {
+      response.status(404).json({
+        ok: false,
+        message: 'No encontramos una cuenta para este usuario.',
+      })
+      return
+    }
+
+    const recentPayments = await listRecentContributions(userId)
+
+    response.json({
+      ok: true,
+      message: 'Estado de cuenta cargado.',
+      account: serializeAccount(account),
+      recentPayments,
+    })
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudo cargar la cuenta.',
     })
   }
 })
@@ -224,6 +285,47 @@ app.post('/api/access/register', async (request, response) => {
     response.status(500).json({
       ok: false,
       message: error instanceof Error ? error.message : 'No se pudo crear el registro.',
+    })
+  }
+})
+
+app.post('/api/access/weekly-payment', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const userId = normalizeUserId(request.body?.userId)
+
+  if (!userId) {
+    response.status(400).json({
+      ok: false,
+      message: 'User ID invalido.',
+    })
+    return
+  }
+
+  try {
+    const result = await recordWeeklyContribution(userId, WEEKLY_CONTRIBUTION_AMOUNT)
+
+    response.status(201).json({
+      ok: true,
+      message: `Se registraron $${WEEKLY_CONTRIBUTION_AMOUNT} para la semana actual.`,
+      account: result.account ? serializeAccount(result.account) : null,
+      payment: result.payment,
+      recentPayments: result.recentPayments,
+    })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'DUPLICATE_WEEKLY_PAYMENT') {
+      response.status(409).json({
+        ok: false,
+        message: error.message,
+      })
+      return
+    }
+
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudo registrar la cuota semanal.',
     })
   }
 })

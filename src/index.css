@@ -79,9 +79,23 @@ img {
   align-content: center;
 }
 
+.dashboard-shell {
+  min-height: 100vh;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
 .access-layout {
   display: grid;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
   gap: 18px;
   align-items: stretch;
 }
@@ -103,9 +117,33 @@ img {
   border-radius: 32px;
 }
 
+.dashboard-banner {
+  min-height: 220px;
+  padding: 28px;
+  background:
+    linear-gradient(120deg, rgba(3, 84, 255, 0.2), rgba(104, 165, 255, 0.08)),
+    linear-gradient(180deg, rgba(9, 17, 31, 0.92), rgba(3, 7, 16, 0.96));
+}
+
 .access-art-card {
   position: relative;
   min-height: 700px;
+}
+
+.dashboard-art-card {
+  position: relative;
+  min-height: 760px;
+}
+
+.dashboard-banner-copy {
+  display: grid;
+  gap: 18px;
+}
+
+.dashboard-title {
+  margin: 12px 0 8px;
+  line-height: 0.92;
+  letter-spacing: -0.04em;
 }
 
 .hero-art {
@@ -151,6 +189,10 @@ img {
   padding: 30px;
 }
 
+.dashboard-account-card {
+  padding: 30px;
+}
+
 .access-title {
   max-width: 10ch;
 }
@@ -186,6 +228,12 @@ img {
 .mini-info-card {
   padding: 16px;
   border-radius: 22px;
+}
+
+.account-stat-card,
+.account-aside-card,
+.recent-payments-card {
+  background: linear-gradient(180deg, rgba(11, 19, 35, 0.94), rgba(4, 9, 20, 0.98));
 }
 
 .mini-info-card strong {
@@ -238,12 +286,68 @@ img {
   font-weight: 700;
 }
 
+.weekly-pay-button {
+  min-width: 280px;
+}
+
+.payment-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.payment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.payment-row div {
+  display: grid;
+  gap: 4px;
+}
+
+.payment-row span,
+.member-summary span {
+  color: rgba(237, 243, 255, 0.76);
+  font-size: 0.9rem;
+}
+
+.payment-row small {
+  color: rgba(243, 244, 247, 0.62);
+}
+
+.member-summary {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.member-summary div {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.member-summary p {
+  margin: 6px 0 0;
+  color: #f3f4f7;
+}
+
 @media (max-width: 1080px) {
-  .access-layout {
+  .access-layout,
+  .dashboard-layout {
     grid-template-columns: 1fr;
   }
 
-  .access-art-card {
+  .access-art-card,
+  .dashboard-art-card {
     min-height: 520px;
   }
 }
@@ -258,6 +362,11 @@ img {
     padding: 18px;
   }
 
+  .dashboard-account-card,
+  .dashboard-banner {
+    padding: 18px;
+  }
+
   .art-overlay-copy {
     left: 14px;
     right: 14px;
@@ -266,8 +375,13 @@ img {
   }
 
   .access-title,
-  .overlay-title {
+  .overlay-title,
+  .dashboard-title {
     max-width: none;
     font-size: clamp(2.4rem, 12vw, 4.6rem);
+  }
+
+  .weekly-pay-button {
+    min-width: 100%;
   }
 }

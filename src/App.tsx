@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import {
   Badge,
+  Box,
   Button,
   Card,
   Flex,
@@ -9,10 +10,20 @@ import {
   Inset,
   Section,
   SegmentedControl,
+  Separator,
   Text,
   TextField,
 } from '@radix-ui/themes'
-import { Fingerprint, ShieldCheck, Sparkles, UserRoundPlus } from 'lucide-react'
+import {
+  Banknote,
+  CalendarDays,
+  Fingerprint,
+  LogOut,
+  ShieldCheck,
+  Sparkles,
+  UserRoundPlus,
+  Wallet,
+} from 'lucide-react'
 import { motion } from 'framer-motion'
 import heroArt from '../3356B985-EEDA-4D78-BE8D-1DD8A9293B2A.png'
 
@@ -35,6 +46,23 @@ type AccessUser = {
   lastLoginAt: string | null
 }
 
+type AccountSummary = {
+  userId: number
+  totalContributed: number
+  paymentCount: number
+  lastPaymentAt: string | null
+  weeklyContributionAmount: number
+  currentWeekPaid: boolean
+  currentWeekKey: string
+}
+
+type ContributionPayment = {
+  id: number
+  amount: number
+  weekKey: string
+  paidAt: string
+}
+
 type BootstrapResponse = {
   ok: boolean
   message: string
@@ -49,6 +77,14 @@ type AccessResponse = {
   user?: AccessUser
 }
 
+type AccountResponse = {
+  ok: boolean
+  message: string
+  account?: AccountSummary | null
+  recentPayments?: ContributionPayment[]
+  payment?: ContributionPayment
+}
+
 const panelMotion = {
   initial: { opacity: 0, y: 24 },
   animate: { opacity: 1, y: 0 },
@@ -61,6 +97,17 @@ const initialStats: AccessStats = {
   activeToday: 0,
 }
 
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 2,
+})
+
+const dateFormatter = new Intl.DateTimeFormat('es-US', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
 function App() {
   const [mode, setMode] = useState<AccessMode>('login')
   const [firstName, setFirstName] = useState('')
@@ -68,11 +115,17 @@ function App() {
   const [stateId, setStateId] = useState('')
   const [submittedMessage, setSubmittedMessage] = useState('Cargando backend...')
   const [errorMessage, setErrorMessage] = useState('')
+  const [accountMessage, setAccountMessage] = useState('')
+  const [accountError, setAccountError] = useState('')
   const [stats, setStats] = useState<AccessStats>(initialStats)
   const [demoUsers, setDemoUsers] = useState<AccessUser[]>([])
   const [currentUser, setCurrentUser] = useState<AccessUser | null>(null)
+  const [account, setAccount] = useState<AccountSummary | null>(null)
+  const [recentPayments, setRecentPayments] = useState<ContributionPayment[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isLoadingAccount, setIsLoadingAccount] = useState(false)
+  const [isRegisteringPayment, setIsRegisteringPayment] = useState(false)
 
   useEffect(() => {
     const loadBootstrap = async () => {
@@ -100,6 +153,31 @@ function App() {
     void loadBootstrap()
   }, [])
 
+  const loadAccount = async (userId: number) => {
+    setIsLoadingAccount(true)
+    setAccountError('')
+
+    try {
+      const response = await fetch(`/api/access/account/${userId}`)
+      const data = (await response.json()) as AccountResponse
+
+      if (!response.ok || !data.ok || !data.account) {
+        throw new Error(data.message ?? 'No se pudo cargar el estado de cuenta.')
+      }
+
+      setAccount(data.account)
+      setRecentPayments(data.recentPayments ?? [])
+      setAccountMessage(data.message)
+    } catch (error) {
+      setAccountError(
+        error instanceof Error ? error.message : 'No se pudo cargar la cuenta del miembro.',
+      )
+      setAccountMessage('')
+    } finally {
+      setIsLoadingAccount(false)
+    }
+  }
+
   const headline = useMemo(() => {
     if (mode === 'register') {
       return 'Crea tu acceso con identidad clara desde el primer segundo.'
@@ -115,6 +193,18 @@ function App() {
 
     return 'El login ya valida contra el backend usando solo nombre y State ID.'
   }, [mode])
+
+  const weeklyButtonLabel = useMemo(() => {
+    if (!account) {
+      return 'Dar dinero semanal'
+    }
+
+    if (account.currentWeekPaid) {
+      return `Semana ${account.currentWeekKey} ya registrada`
+    }
+
+    return `Dar dinero semanal (${currencyFormatter.format(account.weeklyContributionAmount)})`
+  }, [account])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -163,11 +253,15 @@ function App() {
       setCurrentUser(data.user)
       setStats(data.stats)
       setSubmittedMessage(data.message)
+      setAccountMessage('')
+      setAccountError('')
 
       if (mode === 'register') {
         setDemoUsers((currentUsers) => [...currentUsers, data.user!])
         setLastName('')
       }
+
+      await loadAccount(data.user.id)
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Error inesperado al procesar el acceso.',
@@ -175,6 +269,225 @@ function App() {
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  const handleWeeklyPayment = async () => {
+    if (!currentUser || !account || account.currentWeekPaid) {
+      return
+    }
+
+    setIsRegisteringPayment(true)
+    setAccountError('')
+
+    try {
+      const response = await fetch('/api/access/weekly-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId: currentUser.id }),
+      })
+
+      const data = (await response.json()) as AccountResponse
+
+      if (!response.ok || !data.ok || !data.account) {
+        throw new Error(data.message ?? 'No se pudo registrar la cuota semanal.')
+      }
+
+      setAccount(data.account)
+      setRecentPayments(data.recentPayments ?? [])
+      setAccountMessage(data.message)
+    } catch (error) {
+      setAccountError(
+        error instanceof Error ? error.message : 'No se pudo registrar el dinero semanal.',
+      )
+    } finally {
+      setIsRegisteringPayment(false)
+    }
+  }
+
+  const handleLogout = () => {
+    setCurrentUser(null)
+    setAccount(null)
+    setRecentPayments([])
+    setAccountMessage('')
+    setAccountError('')
+    setFirstName('')
+    setLastName('')
+    setStateId('')
+  }
+
+  if (currentUser) {
+    return (
+      <main className="bo-page">
+        <div className="bo-grid" />
+        <Section size="1" className="bo-shell dashboard-shell">
+          <motion.section className="dashboard-hero" {...panelMotion}>
+            <Card className="hero-art-card dashboard-banner">
+              <div className="dashboard-banner-copy">
+                <Badge size="3" radius="full" className="hero-kicker">
+                  MEMBER ACCOUNT
+                </Badge>
+                <Flex justify="between" align="start" gap="4" wrap="wrap">
+                  <div>
+                    <Heading size="8" className="dashboard-title">
+                      {currentUser.fullName}
+                    </Heading>
+                    <Text as="p" size="3" className="overlay-body">
+                      State ID {currentUser.stateId} · Rol {currentUser.role}
+                    </Text>
+                  </div>
+
+                  <Button variant="soft" color="gray" size="3" onClick={handleLogout}>
+                    <LogOut size={16} />
+                    Salir
+                  </Button>
+                </Flex>
+              </div>
+            </Card>
+          </motion.section>
+
+          <motion.section className="dashboard-layout" {...panelMotion}>
+            <Card className="glow-card dashboard-account-card">
+              <Flex direction="column" gap="5">
+                <div>
+                  <Badge size="3" radius="full" className="hero-kicker">
+                    Cuenta semanal
+                  </Badge>
+                  <Heading size="8" className="access-title">
+                    Estado total y aporte de la semana.
+                  </Heading>
+                  <Text as="p" size="3" className="access-copy">
+                    Esta vista registra la cuota semanal una sola vez por semana y mantiene el
+                    estado total de la cuenta del miembro.
+                  </Text>
+                </div>
+
+                {accountError ? <p className="hero-error access-feedback">{accountError}</p> : null}
+                {accountMessage ? (
+                  <p className="hero-success access-feedback success">{accountMessage}</p>
+                ) : null}
+
+                <Grid columns={{ initial: '1', md: '3' }} gap="3">
+                  <Card className="mini-info-card account-stat-card">
+                    <span className="section-icon">
+                      <Wallet size={18} />
+                    </span>
+                    <strong>
+                      {account ? currencyFormatter.format(account.totalContributed) : '$0.00'}
+                    </strong>
+                    <p>estado de cuenta total acumulado.</p>
+                  </Card>
+
+                  <Card className="mini-info-card account-stat-card">
+                    <span className="section-icon">
+                      <Banknote size={18} />
+                    </span>
+                    <strong>{account?.paymentCount ?? 0}</strong>
+                    <p>pagos semanales registrados hasta hoy.</p>
+                  </Card>
+
+                  <Card className="mini-info-card account-stat-card">
+                    <span className="section-icon">
+                      <CalendarDays size={18} />
+                    </span>
+                    <strong>{account?.currentWeekKey ?? 'Sin semana'}</strong>
+                    <p>
+                      {account?.currentWeekPaid
+                        ? 'la semana actual ya tiene cuota registrada.'
+                        : 'la semana actual todavia no tiene cuota.'}
+                    </p>
+                  </Card>
+                </Grid>
+
+                <Flex direction={{ initial: 'column', sm: 'row' }} gap="3">
+                  <Button
+                    size="4"
+                    className="weekly-pay-button"
+                    disabled={isLoadingAccount || isRegisteringPayment || account?.currentWeekPaid}
+                    onClick={handleWeeklyPayment}
+                  >
+                    {isRegisteringPayment ? 'Registrando...' : weeklyButtonLabel}
+                  </Button>
+
+                  <Card className="mini-info-card account-aside-card">
+                    <strong>Aporte semanal fijo</strong>
+                    <p>
+                      {account
+                        ? currencyFormatter.format(account.weeklyContributionAmount)
+                        : currencyFormatter.format(25)}
+                    </p>
+                  </Card>
+                </Flex>
+
+                <Separator size="4" />
+
+                <Grid columns={{ initial: '1', md: '2' }} gap="4">
+                  <Card className="mini-info-card recent-payments-card">
+                    <strong>Movimientos recientes</strong>
+                    <div className="payment-list">
+                      {recentPayments.length ? (
+                        recentPayments.map((payment) => (
+                          <div key={payment.id} className="payment-row">
+                            <div>
+                              <span>{payment.weekKey}</span>
+                              <small>{dateFormatter.format(new Date(payment.paidAt))}</small>
+                            </div>
+                            <strong>{currencyFormatter.format(payment.amount)}</strong>
+                          </div>
+                        ))
+                      ) : (
+                        <p>No hay pagos semanales registrados todavia.</p>
+                      )}
+                    </div>
+                  </Card>
+
+                  <Card className="mini-info-card recent-payments-card">
+                    <strong>Estado del miembro</strong>
+                    <div className="member-summary">
+                      <div>
+                        <span>Ultimo pago</span>
+                        <p>
+                          {account?.lastPaymentAt
+                            ? dateFormatter.format(new Date(account.lastPaymentAt))
+                            : 'Todavia no hay pagos'}
+                        </p>
+                      </div>
+                      <div>
+                        <span>Usuario</span>
+                        <p>{currentUser.fullName}</p>
+                      </div>
+                      <div>
+                        <span>State ID</span>
+                        <p>{currentUser.stateId}</p>
+                      </div>
+                    </div>
+                  </Card>
+                </Grid>
+              </Flex>
+            </Card>
+
+            <Card className="hero-art-card dashboard-art-card">
+              <Inset clip="padding-box" side="all" pb="current">
+                <img src={heroArt} alt="Graffiti Black Oaths" className="hero-art" />
+              </Inset>
+              <div className="art-overlay-copy">
+                <Badge size="3" radius="full" className="hero-kicker">
+                  Weekly Control
+                </Badge>
+                <Heading size="8" className="overlay-title">
+                  Caja semanal.
+                </Heading>
+                <Text as="p" size="3" className="overlay-body">
+                  El sistema crea una cuenta por miembro, guarda historial de cuotas semanales y
+                  bloquea duplicados durante la misma semana.
+                </Text>
+              </div>
+            </Card>
+          </motion.section>
+        </Section>
+      </main>
+    )
   }
 
   return (
@@ -263,14 +576,6 @@ function App() {
               {errorMessage ? <p className="hero-error access-feedback">{errorMessage}</p> : null}
               {submittedMessage ? (
                 <p className="hero-success access-feedback success">{submittedMessage}</p>
-              ) : null}
-
-              {currentUser ? (
-                <Card className="mini-info-card current-user-card">
-                  <strong>{currentUser.fullName}</strong>
-                  <p>State ID: {currentUser.stateId}</p>
-                  <p>Rol: {currentUser.role}</p>
-                </Card>
               ) : null}
 
               <Grid columns={{ initial: '1', sm: '3' }} gap="3">
