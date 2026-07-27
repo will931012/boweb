@@ -260,6 +260,28 @@ export async function findUserByStateId(stateId) {
   return result.rows[0] ?? null
 }
 
+export async function findUserById(userId) {
+  const pool = getPool()
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        first_name AS "firstName",
+        last_name AS "lastName",
+        state_id AS "stateId",
+        role,
+        created_at AS "createdAt",
+        last_login_at AS "lastLoginAt"
+      FROM access_users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [userId],
+  )
+
+  return result.rows[0] ?? null
+}
+
 export async function createUser({ firstName, lastName, stateId, role = 'miembro' }) {
   const pool = getPool()
   const result = await pool.query(

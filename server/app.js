@@ -1,7 +1,9 @@
 import cors from 'cors'
 import express from 'express'
+import { notifyDiscordContribution } from './discord.js'
 import {
   createUser,
+  findUserById,
   findUserByLogin,
   findUserByStateId,
   getAccountSummary,
@@ -328,6 +330,27 @@ app.post('/api/access/weekly-payment', async (request, response) => {
       payments: result.payments,
       recentPayments: result.recentPayments,
     })
+
+    if (result.account) {
+      const user = await findUserById(userId)
+
+      void notifyDiscordContribution({
+        user: user ? serializeUser(user) : {
+          id: userId,
+          firstName: 'Miembro',
+          lastName: '',
+          fullName: 'Miembro',
+          stateId: 'N/A',
+          role: 'miembro',
+          createdAt: new Date().toISOString(),
+          lastLoginAt: null,
+        },
+        account: result.account,
+        payments: result.payments,
+      }).catch((error) => {
+        console.error('No se pudo enviar la notificacion a Discord:', error)
+      })
+    }
   } catch (error) {
     if (error instanceof Error && error.name === 'DUPLICATE_WEEKLY_PAYMENT') {
       response.status(409).json({

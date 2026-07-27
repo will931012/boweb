@@ -109,6 +109,39 @@ const dateFormatter = new Intl.DateTimeFormat('es-US', {
   timeStyle: 'short',
 })
 
+const SESSION_STORAGE_KEY = 'bo-access-user'
+
+function readStoredUser() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(SESSION_STORAGE_KEY)
+
+    if (!rawValue) {
+      return null
+    }
+
+    return JSON.parse(rawValue) as AccessUser
+  } catch {
+    return null
+  }
+}
+
+function storeUserSession(user: AccessUser | null) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  if (!user) {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY)
+    return
+  }
+
+  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(user))
+}
+
 function App() {
   const [mode, setMode] = useState<AccessMode>('login')
   const [firstName, setFirstName] = useState('')
@@ -134,6 +167,13 @@ function App() {
 
   useEffect(() => {
     const loadBootstrap = async () => {
+      const storedUser = readStoredUser()
+
+      if (storedUser) {
+        setCurrentUser(storedUser)
+        void loadAccount(storedUser.id)
+      }
+
       try {
         const response = await fetch('/api/access/bootstrap')
         const data = (await response.json()) as BootstrapResponse
@@ -256,6 +296,7 @@ function App() {
       }
 
       setCurrentUser(data.user)
+      storeUserSession(data.user)
       setStats(data.stats)
       setSubmittedMessage(data.message)
       setAccountMessage('')
@@ -320,6 +361,7 @@ function App() {
   }
 
   const handleLogout = () => {
+    storeUserSession(null)
     setCurrentUser(null)
     setAccount(null)
     setRecentPayments([])
@@ -328,6 +370,7 @@ function App() {
     setFirstName('')
     setLastName('')
     setStateId('')
+    setIsContributionModalOpen(false)
   }
 
   const openContributionModal = () => {
