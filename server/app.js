@@ -201,24 +201,23 @@ app.post('/api/access/login', async (request, response) => {
     return
   }
 
-  const firstName = normalizeText(request.body?.firstName)
   const stateId = normalizeStateId(request.body?.stateId)
 
-  if (!firstName || !stateId) {
+  if (!stateId) {
     response.status(400).json({
       ok: false,
-      message: 'Nombre y State ID son obligatorios.',
+      message: 'State ID es obligatorio.',
     })
     return
   }
 
   try {
-    const user = await findUserByLogin(firstName, stateId)
+    const user = await findUserByLogin(stateId)
 
     if (!user) {
       response.status(401).json({
         ok: false,
-        message: 'No encontramos un acceso con ese nombre y State ID.',
+        message: 'No encontramos un acceso con ese State ID.',
       })
       return
     }

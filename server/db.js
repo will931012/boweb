@@ -216,7 +216,7 @@ export async function listUsers() {
   return result.rows
 }
 
-export async function findUserByLogin(firstName, stateId) {
+export async function findUserByLogin(stateId) {
   const pool = getPool()
   const result = await pool.query(
     `
@@ -229,11 +229,10 @@ export async function findUserByLogin(firstName, stateId) {
         created_at AS "createdAt",
         last_login_at AS "lastLoginAt"
       FROM access_users
-      WHERE LOWER(first_name) = LOWER($1)
-        AND UPPER(state_id) = UPPER($2)
+      WHERE UPPER(state_id) = UPPER($1)
       LIMIT 1
     `,
-    [firstName, stateId],
+    [stateId],
   )
 
   return result.rows[0] ?? null

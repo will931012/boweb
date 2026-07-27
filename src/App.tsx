@@ -188,7 +188,7 @@ function App() {
       return 'Crea tu acceso con identidad clara desde el primer segundo.'
     }
 
-    return 'Entra al sistema solo con tu nombre y tu State ID.'
+    return 'Entra al sistema solo con tu State ID.'
   }, [mode])
 
   const helperCopy = useMemo(() => {
@@ -196,7 +196,7 @@ function App() {
       return 'El backend ya prepara altas nuevas y evita State ID duplicados.'
     }
 
-    return 'El login ya valida contra el backend usando solo nombre y State ID.'
+    return 'El login ya valida contra el backend usando solo State ID.'
   }, [mode])
 
   const weeklyButtonLabel = useMemo(() => {
@@ -224,8 +224,8 @@ function App() {
         setSubmittedMessage('')
         return
       }
-    } else if (!cleanFirstName || !cleanStateId) {
-      setErrorMessage('Completa nombre y State ID para continuar.')
+    } else if (!cleanStateId) {
+      setErrorMessage('Completa State ID para continuar.')
       setSubmittedMessage('')
       return
     }
@@ -239,7 +239,7 @@ function App() {
       const payload =
         mode === 'register'
           ? { firstName: cleanFirstName, lastName: cleanLastName, stateId: cleanStateId }
-          : { firstName: cleanFirstName, stateId: cleanStateId }
+          : { stateId: cleanStateId }
 
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -638,15 +638,17 @@ function App() {
               </SegmentedControl.Root>
 
               <form className="bo-form access-form" onSubmit={handleSubmit}>
-                <label>
-                  <span>Nombre</span>
-                  <TextField.Root
-                    size="3"
-                    value={firstName}
-                    onChange={(event) => setFirstName(event.target.value)}
-                    placeholder="Matias"
-                  />
-                </label>
+                {mode === 'register' ? (
+                  <label>
+                    <span>Nombre</span>
+                    <TextField.Root
+                      size="3"
+                      value={firstName}
+                      onChange={(event) => setFirstName(event.target.value)}
+                      placeholder="Matias"
+                    />
+                  </label>
+                ) : null}
 
                 {mode === 'register' ? (
                   <label>
