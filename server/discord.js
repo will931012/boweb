@@ -21,7 +21,7 @@ function buildContributionLines({ user, account, payments, hasWeeklyContribution
     `📅 Aporte semanal: ${weeklyDelivered ? formatCurrency(weeklyPayment?.amount ?? 0) : 'No entregado'}`,
     `💵 Dinero extra: ${extraPayments.length ? formatCurrency(extraTotal) : 'No entregado'}`,
     `🧾 Total registrado: ${formatCurrency(totalAdded)}`,
-    `🏦 Estado de cuenta total: ${formatCurrency(account.totalContributed)}`,
+    `🏦 Estado de cuenta total: ${formatCurrency(account.globalTotalContributed ?? 0)}`,
   ]
 }
 

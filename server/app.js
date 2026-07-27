@@ -59,6 +59,7 @@ const serializeUser = (user) => ({
 const serializeAccount = (account) => ({
   userId: account.userId,
   totalContributed: account.totalContributed,
+  globalTotalContributed: account.globalTotalContributed,
   paymentCount: account.paymentCount,
   lastPaymentAt: account.lastPaymentAt,
   weeklyContributionAmount: account.weeklyContributionAmount,

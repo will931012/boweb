@@ -117,6 +117,7 @@ function mapAccountSummary(row) {
   return {
     userId: row.userId,
     totalContributed: toCurrencyNumber(row.totalContributed),
+    globalTotalContributed: toCurrencyNumber(row.globalTotalContributed),
     paymentCount: row.paymentCount,
     lastPaymentAt: row.lastPaymentAt,
     weeklyContributionAmount: toCurrencyNumber(row.weeklyContributionAmount),
@@ -594,6 +595,10 @@ export async function getAccountSummary(userId) {
       SELECT
         totals.user_id AS "userId",
         totals.total_contributed::float8 AS "totalContributed",
+        (
+          SELECT COALESCE(SUM(all_totals.total_contributed), 0)::float8
+          FROM account_totals all_totals
+        ) AS "globalTotalContributed",
         totals.payment_count AS "paymentCount",
         totals.last_payment_at AS "lastPaymentAt",
         $2::float8 AS "weeklyContributionAmount",

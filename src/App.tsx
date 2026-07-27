@@ -49,6 +49,7 @@ type AccessUser = {
 type AccountSummary = {
   userId: number
   totalContributed: number
+  globalTotalContributed: number
   paymentCount: number
   lastPaymentAt: string | null
   weeklyContributionAmount: number
@@ -639,7 +640,7 @@ function App() {
                 <Wallet size={18} />
               </span>
               <strong>
-                {account ? currencyFormatter.format(account.totalContributed) : '$0.00'}
+                {account ? currencyFormatter.format(account.globalTotalContributed) : '$0.00'}
               </strong>
               <p>estado de cuenta total aprobado.</p>
             </Card>
@@ -799,6 +800,34 @@ function App() {
             {accountMessage ? (
               <p className="hero-success access-feedback success">{accountMessage}</p>
             ) : null}
+
+            <Grid columns={{ initial: '1', md: '3' }} gap="3">
+              <Card className="mini-info-card account-stat-card">
+                <span className="section-icon">
+                  <Wallet size={18} />
+                </span>
+                <strong>
+                  {account ? currencyFormatter.format(account.globalTotalContributed) : '$0.00'}
+                </strong>
+                <p>estado de cuenta total acumulado entre todos los usuarios.</p>
+              </Card>
+
+              <Card className="mini-info-card account-stat-card">
+                <span className="section-icon">
+                  <Banknote size={18} />
+                </span>
+                <strong>{adminMembers.length}</strong>
+                <p>miembros visibles en la tabla administrativa.</p>
+              </Card>
+
+              <Card className="mini-info-card account-stat-card">
+                <span className="section-icon">
+                  <ShieldCheck size={18} />
+                </span>
+                <strong>{pendingApprovals.length}</strong>
+                <p>aportes pendientes esperando revision del admin.</p>
+              </Card>
+            </Grid>
 
             <Card className="mini-info-card recent-payments-card">
               <strong>Aportes pendientes</strong>
