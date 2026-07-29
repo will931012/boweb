@@ -118,6 +118,8 @@ function mapAccountSummary(row) {
     userId: row.userId,
     totalContributed: toCurrencyNumber(row.totalContributed),
     globalTotalContributed: toCurrencyNumber(row.globalTotalContributed),
+    totalExpenses: toCurrencyNumber(row.totalExpenses),
+    availableBalance: toCurrencyNumber(row.availableBalance),
     paymentCount: row.paymentCount,
     lastPaymentAt: row.lastPaymentAt,
     weeklyContributionAmount: toCurrencyNumber(row.weeklyContributionAmount),
@@ -151,6 +153,17 @@ function mapPendingWeeklyContribution(row) {
     paidAt: row.paidAt,
     kind: row.kind,
     label: row.label,
+  }
+}
+
+function mapAdminExpense(row) {
+  return {
+    id: row.id,
+    amount: toCurrencyNumber(row.amount),
+    reason: row.reason,
+    createdAt: row.createdAt,
+    createdByUserId: row.createdByUserId,
+    createdByName: row.createdByName,
   }
 }
 
@@ -280,6 +293,16 @@ export async function initDatabase() {
       week_key TEXT NOT NULL,
       sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (notification_type, notification_date)
+    )
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_expenses (
+      id BIGSERIAL PRIMARY KEY,
+      amount NUMERIC(12, 2) NOT NULL,
+      reason TEXT NOT NULL,
+      created_by_user_id BIGINT NOT NULL REFERENCES access_users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)
 
@@ -599,6 +622,15 @@ export async function getAccountSummary(userId) {
           SELECT COALESCE(SUM(all_totals.total_contributed), 0)::float8
           FROM account_totals all_totals
         ) AS "globalTotalContributed",
+        (
+          SELECT COALESCE(SUM(expenses.amount), 0)::float8
+          FROM admin_expenses expenses
+        ) AS "totalExpenses",
+        (
+          SELECT
+            COALESCE(SUM(all_totals.total_contributed), 0) - COALESCE((SELECT SUM(expenses.amount) FROM admin_expenses expenses), 0)
+          FROM account_totals all_totals
+        )::float8 AS "availableBalance",
         totals.payment_count AS "paymentCount",
         totals.last_payment_at AS "lastPaymentAt",
         $2::float8 AS "weeklyContributionAmount",
@@ -668,6 +700,83 @@ export async function listRecentContributions(userId, limit = 6) {
   )
 
   return result.rows.map(mapContributionRow)
+}
+
+export async function listAdminExpenses(limit = 10) {
+  const pool = getPool()
+  const result = await pool.query(
+    `
+      SELECT
+        expenses.id,
+        expenses.amount::float8 AS amount,
+        expenses.reason,
+        expenses.created_at AS "createdAt",
+        expenses.created_by_user_id AS "createdByUserId",
+        CONCAT(users.first_name, ' ', users.last_name) AS "createdByName"
+      FROM admin_expenses expenses
+      INNER JOIN access_users users ON users.id = expenses.created_by_user_id
+      ORDER BY expenses.created_at DESC
+      LIMIT $1
+    `,
+    [limit],
+  )
+
+  return result.rows.map(mapAdminExpense)
+}
+
+export async function createAdminExpense({ amount, reason, createdByUserId }) {
+  const pool = getPool()
+  const client = await pool.connect()
+  const normalizedAmount = Number.parseFloat(String(amount))
+  const normalizedReason = String(reason ?? '').trim()
+
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    throw new Error('Ingresa un monto de gasto valido.')
+  }
+
+  if (!normalizedReason) {
+    throw new Error('Ingresa el motivo del gasto.')
+  }
+
+  try {
+    await client.query('BEGIN')
+
+    const result = await client.query(
+      `
+        INSERT INTO admin_expenses (amount, reason, created_by_user_id)
+        VALUES ($1, $2, $3)
+        RETURNING
+          id,
+          amount::float8 AS amount,
+          reason,
+          created_at AS "createdAt",
+          created_by_user_id AS "createdByUserId"
+      `,
+      [normalizedAmount, normalizedReason, createdByUserId],
+    )
+
+    const userResult = await client.query(
+      `
+        SELECT CONCAT(first_name, ' ', last_name) AS "createdByName"
+        FROM access_users
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [createdByUserId],
+    )
+
+    await client.query('COMMIT')
+
+    return mapAdminExpense({
+      ...result.rows[0],
+      createdByName: userResult.rows[0]?.createdByName ?? 'Admin',
+    })
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function recordWeeklyContribution(userId, amount = WEEKLY_CONTRIBUTION_AMOUNT) {

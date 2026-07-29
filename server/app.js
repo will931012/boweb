@@ -2,12 +2,14 @@ import cors from 'cors'
 import express from 'express'
 import { notifyDiscordContribution } from './discord.js'
 import {
+  createAdminExpense,
   createUser,
   findUserById,
   findUserByLogin,
   findUserByStateId,
   getAccountSummary,
   initDatabase,
+  listAdminExpenses,
   listPendingWeeklyContributions,
   listMemberTotals,
   listRecentContributions,
@@ -60,12 +62,23 @@ const serializeAccount = (account) => ({
   userId: account.userId,
   totalContributed: account.totalContributed,
   globalTotalContributed: account.globalTotalContributed,
+  totalExpenses: account.totalExpenses,
+  availableBalance: account.availableBalance,
   paymentCount: account.paymentCount,
   lastPaymentAt: account.lastPaymentAt,
   weeklyContributionAmount: account.weeklyContributionAmount,
   currentWeekPaid: account.currentWeekPaid,
   currentWeekStatus: account.currentWeekStatus,
   currentWeekKey: account.currentWeekKey,
+})
+
+const serializeExpense = (expense) => ({
+  id: expense.id,
+  amount: expense.amount,
+  reason: expense.reason,
+  createdAt: expense.createdAt,
+  createdByUserId: expense.createdByUserId,
+  createdByName: expense.createdByName,
 })
 
 const serializeMemberTotal = (member) => ({
@@ -308,6 +321,47 @@ app.get('/api/admin/contribution-approvals/:userId', async (request, response) =
   }
 })
 
+app.get('/api/admin/expenses/:userId', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const userId = normalizeUserId(request.params.userId)
+
+  if (!userId) {
+    response.status(400).json({
+      ok: false,
+      message: 'User ID invalido.',
+    })
+    return
+  }
+
+  try {
+    const user = await findUserById(userId)
+
+    if (!user || user.role !== 'admin') {
+      response.status(403).json({
+        ok: false,
+        message: 'Solo el rol admin puede ver los gastos.',
+      })
+      return
+    }
+
+    const expenses = await listAdminExpenses()
+
+    response.json({
+      ok: true,
+      message: 'Gastos administrativos cargados.',
+      expenses: expenses.map(serializeExpense),
+    })
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudieron cargar los gastos.',
+    })
+  }
+})
+
 app.post('/api/access/login', async (request, response) => {
   if (!ensureDatabaseReady(response)) {
     return
@@ -520,6 +574,58 @@ app.post('/api/admin/contribution-approvals/:kind/:contributionId', async (reque
     response.status(500).json({
       ok: false,
       message: error instanceof Error ? error.message : 'No se pudo revisar la cuota semanal.',
+    })
+  }
+})
+
+app.post('/api/admin/expenses', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const adminUserId = normalizeUserId(request.body?.adminUserId)
+  const amount = Number.parseFloat(String(request.body?.amount ?? 0))
+  const reason = normalizeText(request.body?.reason)
+
+  if (!adminUserId) {
+    response.status(400).json({
+      ok: false,
+      message: 'Admin user ID invalido.',
+    })
+    return
+  }
+
+  try {
+    const adminUser = await findUserById(adminUserId)
+
+    if (!adminUser || adminUser.role !== 'admin') {
+      response.status(403).json({
+        ok: false,
+        message: 'Solo el rol admin puede registrar gastos.',
+      })
+      return
+    }
+
+    const expense = await createAdminExpense({
+      amount,
+      reason,
+      createdByUserId: adminUserId,
+    })
+
+    const account = await getAccountSummary(adminUserId)
+    const expenses = await listAdminExpenses()
+
+    response.status(201).json({
+      ok: true,
+      message: 'Gasto registrado correctamente.',
+      account: account ? serializeAccount(account) : null,
+      expense: serializeExpense(expense),
+      expenses: expenses.map(serializeExpense),
+    })
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudo registrar el gasto.',
     })
   }
 })
