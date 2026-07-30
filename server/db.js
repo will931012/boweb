@@ -724,6 +724,28 @@ export async function listAdminExpenses(limit = 10) {
   return result.rows.map(mapAdminExpense)
 }
 
+export async function findAdminExpenseById(expenseId) {
+  const pool = getPool()
+  const result = await pool.query(
+    `
+      SELECT
+        expenses.id,
+        expenses.amount::float8 AS amount,
+        expenses.reason,
+        expenses.created_at AS "createdAt",
+        expenses.created_by_user_id AS "createdByUserId",
+        CONCAT(users.first_name, ' ', users.last_name) AS "createdByName"
+      FROM admin_expenses expenses
+      INNER JOIN access_users users ON users.id = expenses.created_by_user_id
+      WHERE expenses.id = $1
+      LIMIT 1
+    `,
+    [expenseId],
+  )
+
+  return result.rows[0] ? mapAdminExpense(result.rows[0]) : null
+}
+
 export async function createAdminExpense({ amount, reason, createdByUserId }) {
   const pool = getPool()
   const client = await pool.connect()

@@ -17,30 +17,32 @@ function buildContributionLines({ user, account, payments, hasWeeklyContribution
   const weeklyDelivered = hasWeeklyContribution || Boolean(weeklyPayment)
 
   return [
-    `👤 Miembro: ${user.fullName} (${user.stateId})`,
-    `📅 Aporte semanal: ${weeklyDelivered ? formatCurrency(weeklyPayment?.amount ?? 0) : 'No entregado'}`,
-    `💵 Dinero extra: ${extraPayments.length ? formatCurrency(extraTotal) : 'No entregado'}`,
-    `🧾 Total registrado: ${formatCurrency(totalAdded)}`,
-    `🏦 Estado de cuenta total: ${formatCurrency(account.globalTotalContributed ?? 0)}`,
+    `Miembro: ${user.fullName} (${user.stateId})`,
+    `Aporte semanal: ${weeklyDelivered ? formatCurrency(weeklyPayment?.amount ?? 0) : 'No entregado'}`,
+    `Dinero extra: ${extraPayments.length ? formatCurrency(extraTotal) : 'No entregado'}`,
+    `Total registrado: ${formatCurrency(totalAdded)}`,
+    `Total acumulado: ${formatCurrency(account.globalTotalContributed ?? 0)}`,
+    `Gastos acumulados: ${formatCurrency(account.totalExpenses ?? 0)}`,
+    `Balance disponible: ${formatCurrency(account.availableBalance ?? 0)}`,
   ]
 }
 
-export async function notifyDiscordContribution({
-  user,
-  account,
-  payments,
-  hasWeeklyContribution = false,
-}) {
-  if (!discordWebhookUrl || !payments.length) {
+function buildExpenseLines({ expense, account, adminUser }) {
+  return [
+    `Admin: ${adminUser.fullName} (${adminUser.stateId})`,
+    `Gasto declarado: ${formatCurrency(expense.amount)}`,
+    `Motivo: ${expense.reason}`,
+    `Total acumulado: ${formatCurrency(account.globalTotalContributed ?? 0)}`,
+    `Gastos acumulados: ${formatCurrency(account.totalExpenses ?? 0)}`,
+    `Balance disponible: ${formatCurrency(account.availableBalance ?? 0)}`,
+  ]
+}
+
+async function postDiscordMessage(lines) {
+  if (!discordWebhookUrl) {
+    console.warn('DISCORD_WEBHOOK_URL no esta configurado. No se enviara notificacion a Discord.')
     return
   }
-
-  const lines = buildContributionLines({
-    user,
-    account,
-    payments,
-    hasWeeklyContribution,
-  })
 
   const response = await fetch(discordWebhookUrl, {
     method: 'POST',
@@ -48,7 +50,7 @@ export async function notifyDiscordContribution({
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      content: ['🔥 Nuevo movimiento registrado en Black Oaths', ...lines].join('\n'),
+      content: lines.join('\n'),
       allowed_mentions: {
         parse: [],
       },
@@ -58,6 +60,38 @@ export async function notifyDiscordContribution({
   if (!response.ok) {
     throw new Error(`Discord webhook respondio con estado ${response.status}.`)
   }
+}
+
+export async function notifyDiscordContribution({
+  user,
+  account,
+  payments,
+  hasWeeklyContribution = false,
+}) {
+  if (!payments.length) {
+    return
+  }
+
+  await postDiscordMessage([
+    'Nuevo movimiento registrado en Black Oaths',
+    ...buildContributionLines({
+      user,
+      account,
+      payments,
+      hasWeeklyContribution,
+    }),
+  ])
+}
+
+export async function notifyDiscordExpense({ expense, account, adminUser }) {
+  if (!expense || !account || !adminUser) {
+    return
+  }
+
+  await postDiscordMessage([
+    'Nuevo gasto registrado en Black Oaths',
+    ...buildExpenseLines({ expense, account, adminUser }),
+  ])
 }
 
 export function getDiscordReminderTimeZone() {
@@ -69,41 +103,22 @@ export async function notifyDiscordMissingWeeklyContributions({
   missingUsers,
   reminderDate,
 }) {
-  if (!discordWebhookUrl) {
-    return
-  }
-
   const contentLines = [
-    `📣 Recordatorio diario de aportes`,
-    `🗓️ Fecha: ${reminderDate}`,
-    `📅 Semana actual: ${weekKey}`,
+    'Recordatorio diario de aportes',
+    `Fecha: ${reminderDate}`,
+    `Semana actual: ${weekKey}`,
   ]
 
   if (missingUsers.length) {
-    contentLines.push(`⚠️ Usuarios pendientes por aportar: ${missingUsers.length}`)
+    contentLines.push(`Usuarios pendientes por aportar: ${missingUsers.length}`)
     contentLines.push(
       ...missingUsers.map(
-        (user, index) => `🔸 ${index + 1}. ${user.fullName} (${user.stateId}) - ${user.weeklyStatus}`,
+        (user, index) => `${index + 1}. ${user.fullName} (${user.stateId}) - ${user.weeklyStatus}`,
       ),
     )
   } else {
-    contentLines.push('✅ Todos los usuarios ya estan al dia en la semana actual.')
+    contentLines.push('Todos los usuarios ya estan al dia en la semana actual.')
   }
 
-  const response = await fetch(discordWebhookUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      content: contentLines.join('\n'),
-      allowed_mentions: {
-        parse: [],
-      },
-    }),
-  })
-
-  if (!response.ok) {
-    throw new Error(`Discord webhook respondio con estado ${response.status}.`)
-  }
+  await postDiscordMessage(contentLines)
 }

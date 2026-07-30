@@ -498,6 +498,10 @@ img {
   color: rgba(237, 243, 255, 0.82);
 }
 
+.expense-resend-action {
+  margin-top: 10px;
+}
+
 .is-loading {
   pointer-events: none;
 }

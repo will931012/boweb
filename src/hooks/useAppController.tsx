@@ -55,6 +55,7 @@ export function useAppController() {
   const [isLoadingAdminApprovals, setIsLoadingAdminApprovals] = useState(false)
   const [isLoadingAdminExpenses, setIsLoadingAdminExpenses] = useState(false)
   const [isRegisteringExpense, setIsRegisteringExpense] = useState(false)
+  const [resendingExpenseId, setResendingExpenseId] = useState<number | null>(null)
   const [reviewingContributionKey, setReviewingContributionKey] = useState<string | null>(null)
   const [isContributionModalOpen, setIsContributionModalOpen] = useState(false)
   const [includeWeeklyContribution, setIncludeWeeklyContribution] = useState(false)
@@ -369,6 +370,34 @@ export function useAppController() {
     }
   }
 
+  const handleResendExpenseMessage = async (expenseId: number) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      return
+    }
+
+    setResendingExpenseId(expenseId)
+    setAccountError('')
+
+    try {
+      const data = await fetchJson<AdminExpensesResponse>(`/api/admin/expenses/${expenseId}/resend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminUserId: currentUser.id,
+        }),
+      })
+
+      setAccount(data.account ?? null)
+      setAccountMessage(data.message)
+    } catch (error) {
+      setAccountError(
+        error instanceof Error ? error.message : 'No se pudo reenviar el mensaje del gasto.',
+      )
+    } finally {
+      setResendingExpenseId(null)
+    }
+  }
+
   const handleLogout = () => {
     storeUserSession(null)
     setCurrentUser(null)
@@ -433,6 +462,7 @@ export function useAppController() {
     isLoadingAdminApprovals,
     isLoadingAdminExpenses,
     isRegisteringExpense,
+    resendingExpenseId,
     reviewingContributionKey,
     isContributionModalOpen,
     includeWeeklyContribution,
@@ -456,6 +486,7 @@ export function useAppController() {
     handleContributionSubmit,
     handleReviewContribution,
     handleExpenseSubmit,
+    handleResendExpenseMessage,
     handleLogout,
     openContributionModal,
     closeContributionModal,

@@ -56,11 +56,13 @@ function App() {
             isLoadingAdminApprovals={controller.isLoadingAdminApprovals}
             isLoadingAdminExpenses={controller.isLoadingAdminExpenses}
             isRegisteringExpense={controller.isRegisteringExpense}
+            resendingExpenseId={controller.resendingExpenseId}
             reviewingContributionKey={controller.reviewingContributionKey}
             onReviewContribution={controller.handleReviewContribution}
             onExpenseAmountChange={controller.setExpenseAmount}
             onExpenseReasonChange={controller.setExpenseReason}
             onExpenseSubmit={controller.handleExpenseSubmit}
+            onResendExpenseMessage={controller.handleResendExpenseMessage}
           />
         ) : (
           <MemberRoute

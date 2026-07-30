@@ -1,9 +1,10 @@
 import cors from 'cors'
 import express from 'express'
-import { notifyDiscordContribution } from './discord.js'
+import { notifyDiscordContribution, notifyDiscordExpense } from './discord.js'
 import {
   createAdminExpense,
   createUser,
+  findAdminExpenseById,
   findUserById,
   findUserByLogin,
   findUserByStateId,
@@ -622,10 +623,87 @@ app.post('/api/admin/expenses', async (request, response) => {
       expense: serializeExpense(expense),
       expenses: expenses.map(serializeExpense),
     })
+
+    if (account) {
+      void notifyDiscordExpense({
+        expense: serializeExpense(expense),
+        account,
+        adminUser: serializeUser(adminUser),
+      }).catch((error) => {
+        console.error('No se pudo enviar la notificacion de gasto a Discord:', error)
+      })
+    }
   } catch (error) {
     response.status(500).json({
       ok: false,
       message: error instanceof Error ? error.message : 'No se pudo registrar el gasto.',
+    })
+  }
+})
+
+app.post('/api/admin/expenses/:expenseId/resend', async (request, response) => {
+  if (!ensureDatabaseReady(response)) {
+    return
+  }
+
+  const expenseId = normalizeUserId(request.params.expenseId)
+  const adminUserId = normalizeUserId(request.body?.adminUserId)
+
+  if (!expenseId || !adminUserId) {
+    response.status(400).json({
+      ok: false,
+      message: 'Datos invalidos para reenviar el gasto.',
+    })
+    return
+  }
+
+  try {
+    const adminUser = await findUserById(adminUserId)
+
+    if (!adminUser || adminUser.role !== 'admin') {
+      response.status(403).json({
+        ok: false,
+        message: 'Solo el rol admin puede reenviar gastos.',
+      })
+      return
+    }
+
+    const expense = await findAdminExpenseById(expenseId)
+
+    if (!expense) {
+      response.status(404).json({
+        ok: false,
+        message: 'No encontramos ese gasto.',
+      })
+      return
+    }
+
+    const account = await getAccountSummary(adminUserId)
+
+    if (!account) {
+      response.status(404).json({
+        ok: false,
+        message: 'No se pudo cargar la cuenta administrativa.',
+      })
+      return
+    }
+
+    await notifyDiscordExpense({
+      expense: serializeExpense(expense),
+      account,
+      adminUser: serializeUser(adminUser),
+    })
+
+    response.json({
+      ok: true,
+      message: 'Mensaje de gasto reenviado a Discord.',
+      account: serializeAccount(account),
+      expense: serializeExpense(expense),
+    })
+  } catch (error) {
+    response.status(500).json({
+      ok: false,
+      message: error instanceof Error ? error.message : 'No se pudo reenviar el gasto a Discord.',
     })
   }
 })

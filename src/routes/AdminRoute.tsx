@@ -31,11 +31,13 @@ type AdminRouteProps = {
   isLoadingAdminApprovals: boolean
   isLoadingAdminExpenses: boolean
   isRegisteringExpense: boolean
+  resendingExpenseId: number | null
   reviewingContributionKey: string | null
   onReviewContribution: (contribution: AdminPendingContribution, action: 'approve' | 'deny') => void
   onExpenseAmountChange: (value: string) => void
   onExpenseReasonChange: (value: string) => void
   onExpenseSubmit: () => void
+  onResendExpenseMessage: (expenseId: number) => void
 }
 
 export function AdminRoute({
@@ -52,11 +54,13 @@ export function AdminRoute({
   isLoadingAdminApprovals,
   isLoadingAdminExpenses,
   isRegisteringExpense,
+  resendingExpenseId,
   reviewingContributionKey,
   onReviewContribution,
   onExpenseAmountChange,
   onExpenseReasonChange,
   onExpenseSubmit,
+  onResendExpenseMessage,
 }: AdminRouteProps) {
   if (currentUser.role !== 'admin') {
     return (
@@ -170,6 +174,16 @@ export function AdminRoute({
                         <small>
                           {expense.createdByName} - {dateFormatter.format(new Date(expense.createdAt))}
                         </small>
+                        <div className="expense-resend-action">
+                          <Button
+                            size="1"
+                            variant="soft"
+                            disabled={resendingExpenseId === expense.id}
+                            onClick={() => onResendExpenseMessage(expense.id)}
+                          >
+                            {resendingExpenseId === expense.id ? 'Enviando...' : 'Enviar mensaje'}
+                          </Button>
+                        </div>
                       </div>
                       <strong>{currencyFormatter.format(expense.amount)}</strong>
                     </div>
