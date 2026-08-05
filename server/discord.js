@@ -38,6 +38,11 @@ function buildExpenseLines({ expense, account, adminUser }) {
   ]
 }
 
+function wrapDiscordMessage(lines) {
+  const separator = '----------------------'
+  return [separator, ...lines, separator]
+}
+
 async function postDiscordMessage(lines) {
   if (!discordWebhookUrl) {
     console.warn('DISCORD_WEBHOOK_URL no esta configurado. No se enviara notificacion a Discord.')
@@ -50,7 +55,7 @@ async function postDiscordMessage(lines) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      content: lines.join('\n'),
+      content: wrapDiscordMessage(lines).join('\n'),
       allowed_mentions: {
         parse: [],
       },
